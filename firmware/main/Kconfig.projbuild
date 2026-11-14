@@ -1,0 +1,30 @@
+menu "Модуль моніторингу (dm)"
+
+    choice DM_LED_TYPE
+        prompt "Тип вбудованого світлодіода"
+        default DM_LED_TYPE_STRIP if IDF_TARGET_ESP32S3
+        default DM_LED_TYPE_GPIO
+
+        config DM_LED_TYPE_STRIP
+            bool "Адресний RGB (WS2812)"
+        config DM_LED_TYPE_GPIO
+            bool "Звичайний світлодіод на GPIO"
+    endchoice
+
+    config DM_LED_GPIO
+        int "GPIO світлодіода"
+        default 48 if IDF_TARGET_ESP32S3
+        default 8 if IDF_TARGET_ESP32C3
+        default 2
+
+    config DM_LED_ACTIVE_LOW
+        bool "Світлодіод світиться при низькому рівні"
+        depends on DM_LED_TYPE_GPIO
+        default y if IDF_TARGET_ESP32C3
+        default n
+
+    config DM_WIFI_SWITCH_AFTER_FAILS
+        int "Після скількох невдалих спроб перемикатися на іншу мережу"
+        default 3
+
+endmenu
