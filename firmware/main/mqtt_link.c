@@ -39,13 +39,12 @@ int mqtt_link_publish(const char *suffix, const char *data, int qos, bool retain
 {
     char t[48];
     topic(t, sizeof(t), suffix);
-    int r = -1;
+    // s_lock тримаємо лише для читання вказівника: під час обробки подій клієнт
+    // тримає власне блокування, і вкладене очікування призвело б до взаємоблокування.
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (s_client && s_connected) {
-        r = esp_mqtt_client_publish(s_client, t, data, 0, qos, retain);
-    }
+    esp_mqtt_client_handle_t c = s_connected ? s_client : NULL;
     xSemaphoreGive(s_lock);
-    return r;
+    return c ? esp_mqtt_client_publish(c, t, data, 0, qos, retain) : -1;
 }
 
 void mqtt_link_publish_status(void)
@@ -71,11 +70,38 @@ void mqtt_link_publish_status(void)
     cJSON_free(s);
 }
 
-void mqtt_link_publish_offline(const char *reason)
+static char s_offline_reason[16];
+static volatile int s_offline_msg_id = -1;
+
+#define BIT_OFFLINE_ACKED BIT1
+
+// Окрема задача: із задачі MQTT-клієнта не можна викликати esp_mqtt_client_stop.
+static void offline_task(void *arg)
 {
     char s[64];
-    snprintf(s, sizeof(s), "{\"state\":\"offline\",\"reason\":\"%s\"}", reason);
-    mqtt_link_publish("status", s, 1, true);
+    snprintf(s, sizeof(s), "{\"state\":\"offline\",\"reason\":\"%s\"}", s_offline_reason);
+    s_offline_msg_id = mqtt_link_publish("status", s, 1, true);
+    // Чекаємо PUBACK, щоб у сокеті не лишилося непрочитаних даних: інакше закриття
+    // з'єднання йде як RST, брокер губить DISCONNECT і публікує Last Will без reason.
+    if (s_offline_msg_id > 0) {
+        xEventGroupWaitBits(s_ev, BIT_OFFLINE_ACKED, pdTRUE, pdTRUE, pdMS_TO_TICKS(2000));
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_mqtt_client_handle_t c = s_client;
+    s_connected = false;
+    xSemaphoreGive(s_lock);
+    if (c) esp_mqtt_client_stop(c); // надсилає DISCONNECT, Last Will не спрацьовує
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+}
+
+void mqtt_link_offline_and_restart(const char *reason)
+{
+    strlcpy(s_offline_reason, reason, sizeof(s_offline_reason));
+    device_restart_after_ms(5000); // запасний варіант, якщо щось зависне
+    if (xTaskCreate(offline_task, "offline", 3072, NULL, 5, NULL) != pdPASS) {
+        device_restart_after_ms(500);
+    }
 }
 
 static bool topic_is(const esp_mqtt_event_t *e, const char *t)
@@ -98,6 +124,9 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
     case MQTT_EVENT_DISCONNECTED:
         if (s_connected) ESP_LOGW(TAG, "з'єднання з брокером втрачено");
         s_connected = false;
+        break;
+    case MQTT_EVENT_PUBLISHED:
+        if (e->msg_id == s_offline_msg_id) xEventGroupSetBits(s_ev, BIT_OFFLINE_ACKED);
         break;
     case MQTT_EVENT_ERROR:
         if (e->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
@@ -150,11 +179,12 @@ static void client_start(void)
         .network.reconnect_timeout_ms = 5000 + esp_random() % 5000,
         .buffer.size = 2048,
     };
+    esp_mqtt_client_handle_t c = esp_mqtt_client_init(&cfg);
+    esp_mqtt_client_register_event(c, ESP_EVENT_ANY_ID, on_mqtt, NULL);
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_client = esp_mqtt_client_init(&cfg);
-    esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, on_mqtt, NULL);
-    esp_mqtt_client_start(s_client);
+    s_client = c;
     xSemaphoreGive(s_lock);
+    esp_mqtt_client_start(c);
     ESP_LOGI(TAG, "брокер %s", uri);
 }
 
@@ -167,6 +197,7 @@ static void client_stop(void)
     s_connected = false;
     xSemaphoreGive(s_lock);
     if (c) {
+        vTaskDelay(pdMS_TO_TICKS(500)); // дати завершитися публікаціям, що вже взяли вказівник
         esp_mqtt_client_stop(c);
         esp_mqtt_client_destroy(c);
     }

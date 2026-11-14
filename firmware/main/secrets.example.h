@@ -20,3 +20,6 @@
 
 // Сервер часу (SNTP)
 #define DM_SNTP_SERVER         "pool.ntp.org"
+
+// Діагностика: при старті вивести в лог список видимих мереж Wi-Fi
+// #define DM_DIAG_SCAN 1

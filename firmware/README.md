@@ -47,3 +47,16 @@ idf.py -B build-c3 -D SDKCONFIG=build-c3/sdkconfig -p COM5 flash monitor
 |---|---|---|
 | ESP32-C3, 4 МБ | `partitions_4mb.csv` | 2 × 1,875 МБ |
 | ESP32-S3, 16 МБ | `partitions_16mb.csv` | 2 × 4 МБ (решта flash вільна) |
+
+## Що перевірено на платах (2026-11-14)
+
+Сервер з PR #1 піднято локально (`docker compose`), плати ESP32-S3 (rev v0.2) і ESP32-C3 (rev v0.4) у мережі Wi-Fi:
+
+- реєстрація через `/api/provision`, підключення до MQTT з виданим паролем;
+- `status` online (chip, fw, idf, ip, ssid, reset_reason, config_rev, led, caps), телеметрія раз на 1 с, `ts` після синхронізації SNTP;
+- `config` зі зміною `interval_s` (1 → 5 → 1 с) і поверненням `config_rev` у `status`;
+- команди `led` (on / blink), невідома команда і неправильний `mode` дають `error`;
+- `restart`: `ok`, `offline` з `reason: "restart"`, після старту `reset_reason: "sw"`;
+- `ota` через інтерфейс сервера: 0.1.0 → 0.1.1 на обох чипах, прогрес кожні 10 %, перевірка SHA-256, `reset_reason: "ota"`; повтор тієї самої версії відхиляється.
+
+Не перевірено: запасна мережа Wi-Fi (поки не задана), Last Will при вимкненні живлення, TLS (8883), повторна реєстрація після 3 відмов брокера і відповідь 409, OTA на третій S3 і другій C3.

@@ -56,6 +56,7 @@ void status_led_init(void)
         .mode = GPIO_MODE_OUTPUT,
     };
     gpio_config(&io);
+    ESP_LOGI(TAG, "світлодіод на GPIO%d", CONFIG_DM_LED_GPIO);
 #endif
     const esp_timer_create_args_t a = { .callback = blink_cb, .name = "led_blink" };
     esp_timer_create(&a, &s_blink);

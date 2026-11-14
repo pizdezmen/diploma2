@@ -44,8 +44,7 @@ static void cmd_led(const char *id, const cJSON *params)
 static void cmd_restart(const char *id)
 {
     commands_ack(id, "ok", -1, NULL);
-    mqtt_link_publish_offline("restart");
-    device_restart_after_ms(500);
+    mqtt_link_offline_and_restart("restart");
 }
 
 static void cmd_ota(const char *id, const cJSON *params)

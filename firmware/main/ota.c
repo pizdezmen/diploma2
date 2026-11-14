@@ -146,9 +146,8 @@ static void ota_task(void *arg)
 
     ESP_LOGI(TAG, "готово, версія %s, перезапуск", desc.version);
     commands_ack(s_req.id, "ok", 100, NULL);
-    mqtt_link_publish_offline("ota");
     device_mark_restart_reason_ota();
-    device_restart_after_ms(500);
+    mqtt_link_offline_and_restart("ota");
 
 done:
     s_busy = false;

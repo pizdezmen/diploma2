@@ -46,7 +46,7 @@ void mqtt_link_run(void);   // нескінченний цикл: реєстра
 bool mqtt_link_connected(void);
 int  mqtt_link_publish(const char *suffix, const char *data, int qos, bool retain);
 void mqtt_link_publish_status(void);
-void mqtt_link_publish_offline(const char *reason);
+void mqtt_link_offline_and_restart(const char *reason); // публікує offline, відключається і перезапускає модуль
 
 // ---- telemetry.c ----
 void     telemetry_start(void);

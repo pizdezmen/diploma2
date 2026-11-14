@@ -50,7 +50,23 @@ static void retry_cb(void *arg) { esp_wifi_connect(); }
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+#ifdef DM_DIAG_SCAN
+        // Діагностика: спершу перелік видимих мереж (вмикається в secrets.h).
+        wifi_scan_config_t sc = { .show_hidden = false };
+        if (esp_wifi_scan_start(&sc, false) == ESP_OK) return;
+#endif
         esp_wifi_connect();
+#ifdef DM_DIAG_SCAN
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_SCAN_DONE) {
+        uint16_t n = 20;
+        static wifi_ap_record_t aps[20];
+        if (esp_wifi_scan_get_ap_records(&n, aps) == ESP_OK) {
+            for (int k = 0; k < n; k++) {
+                ESP_LOGI(TAG, "скан: \"%s\" %d дБм, канал %d", (char *)aps[k].ssid, aps[k].rssi, aps[k].primary);
+            }
+        }
+        if (!wifi_mgr_is_connected()) esp_wifi_connect();
+#endif
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *d = data;
         xEventGroupClearBits(s_ev, BIT_CONNECTED);
