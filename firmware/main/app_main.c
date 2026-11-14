@@ -4,7 +4,6 @@
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "nvs_flash.h"
-#include "secrets.h"
 #include "dm.h"
 
 static const char *TAG = "dm";
@@ -17,13 +16,18 @@ void app_main(void)
 
     device_info_init();
     status_led_init();
+    netcfg_load();
+    serial_cfg_start();
 
     ESP_LOGI(TAG, "Модуль %s, чип %s, прошивка %s, старт: %s",
              device_id(), device_chip(), device_fw_version(), device_reset_reason());
 
+    if (!netcfg_usable()) {
+        status_led_set(LED_BLINK); // ознака: модуль ще не налаштовано
+    }
     wifi_mgr_start();
 
-    esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(DM_SNTP_SERVER);
+    esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     esp_netif_sntp_init(&sntp_cfg);
 
     telemetry_start();

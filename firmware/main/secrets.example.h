@@ -1,3 +1,4 @@
+// Значення для розробки (необов'язково). Налаштування, задані з сайту через USB, мають пріоритет.
 // Скопіюйте цей файл у secrets.h і заповніть. secrets.h не потрапляє в git.
 #pragma once
 
@@ -18,8 +19,6 @@
 // Токен реєстрації, той самий, що PROVISION_TOKEN у .env сервера
 #define DM_PROVISION_TOKEN     "change-me-provision"
 
-// Сервер часу (SNTP)
-#define DM_SNTP_SERVER         "pool.ntp.org"
 
 // Діагностика: при старті вивести в лог список видимих мереж Wi-Fi
 // #define DM_DIAG_SCAN 1
