@@ -10,7 +10,6 @@
 #include "esp_log.h"
 #include "esp_idf_version.h"
 #include "cJSON.h"
-#include "secrets.h"
 #include "dm.h"
 
 static const char *TAG = "mqtt";
@@ -158,12 +157,13 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
 
 static void client_start(void)
 {
-    static char uri[96];
-    snprintf(uri, sizeof(uri), "%s://%s:%d", DM_MQTT_TLS ? "mqtts" : "mqtt", DM_MQTT_HOST, DM_MQTT_PORT);
+    const dm_netcfg_t *nc = netcfg();
+    static char uri[128];
+    snprintf(uri, sizeof(uri), "%s://%s:%u", nc->mqtt_tls ? "mqtts" : "mqtt", nc->mqtt_host, nc->mqtt_port);
 
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = uri,
-        .broker.verification.crt_bundle_attach = DM_MQTT_TLS ? esp_crt_bundle_attach : NULL,
+        .broker.verification.crt_bundle_attach = nc->mqtt_tls ? esp_crt_bundle_attach : NULL,
         .credentials.client_id = device_id(),
         .credentials.username = device_id(),
         .credentials.authentication.password = s_pass,

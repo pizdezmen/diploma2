@@ -4,21 +4,20 @@
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "cJSON.h"
-#include "secrets.h"
 #include "dm.h"
 
 static const char *TAG = "provision";
 
 provision_result_t provision_request(char *pass_out, size_t len)
 {
-    char url[160];
-    snprintf(url, sizeof(url), "%s/api/provision", DM_SERVER_URL);
+    char url[176];
+    snprintf(url, sizeof(url), "%s/api/provision", netcfg()->server_url);
 
     cJSON *req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "id", device_id());
     cJSON_AddStringToObject(req, "chip", device_chip());
     cJSON_AddStringToObject(req, "fw", device_fw_version());
-    cJSON_AddStringToObject(req, "token", DM_PROVISION_TOKEN);
+    cJSON_AddStringToObject(req, "token", netcfg()->token);
     char *body = cJSON_PrintUnformatted(req);
     cJSON_Delete(req);
 

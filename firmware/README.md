@@ -14,6 +14,12 @@ ESP-IDF, одна кодова база для ESP32-S3 (16 МБ flash, 8 МБ P
 
 ## Налаштування
 
+Основний спосіб — з сайту (сторінка «Додати модуль», PROTOCOL.md розділ 6): сайт прошиває повний образ
+і передає через USB назви й паролі Wi-Fi, адресу сервера, брокер MQTT і токен. Модуль зберігає їх у NVS.
+Поки налаштувань немає, світлодіод блимає, а модуль чекає команд на USB-порту.
+
+Для розробки можна задати ті самі значення у файлі (налаштування з NVS мають пріоритет):
+
 ```
 copy main\secrets.example.h main\secrets.h
 ```
@@ -37,6 +43,15 @@ idf.py -B build-c3 -D SDKCONFIG=build-c3/sdkconfig set-target esp32c3 build
 idf.py -B build-s3 -D SDKCONFIG=build-s3/sdkconfig -p COM6 flash monitor
 idf.py -B build-c3 -D SDKCONFIG=build-c3/sdkconfig -p COM5 flash monitor
 ```
+
+Повні образи для сайту (без значень із `secrets.h`, запис з адреси 0):
+
+```
+idf.py -B build-site-s3 -D SDKCONFIG=build-site-s3/sdkconfig -D DM_NO_SECRETS=1 set-target esp32s3 build
+idf.py -B build-site-s3 -D SDKCONFIG=build-site-s3/sdkconfig -D DM_NO_SECRETS=1 merge-bin -o dm_full_s3.bin
+```
+
+(для C3 так само з `c3` / `esp32c3`). Файл з'являється в `build-site-s3/dm_full_s3.bin`.
 
 Для OTA в інтерфейс завантажується файл `build-xx/dm_module.bin`. Версія прошивки — у `version.txt`;
 перед збиранням оновлення її треба збільшити, бо модуль відхиляє ту саму версію.

@@ -24,6 +24,24 @@ esp_err_t settings_erase_mqtt_pass(void);
 void      settings_get_config(uint32_t *rev, uint32_t *interval_s);
 esp_err_t settings_set_config(uint32_t rev, uint32_t interval_s);
 
+// ---- netcfg.c: мережеві налаштування (NVS з сайту, інакше secrets.h) ----
+typedef struct {
+    struct { char ssid[33]; char pass[65]; } wifi[2]; // [1].ssid порожній = запасної немає
+    char     server_url[128];
+    char     mqtt_host[96];
+    uint16_t mqtt_port;
+    bool     mqtt_tls;
+    char     token[80];
+} dm_netcfg_t;
+void               netcfg_load(void);
+const dm_netcfg_t *netcfg(void);
+bool               netcfg_configured(void); // збережено в NVS
+bool               netcfg_usable(void);     // є з чим підключатися
+esp_err_t          netcfg_save(const dm_netcfg_t *c);
+
+// ---- serial_cfg.c: команди info / provision через USB ----
+void serial_cfg_start(void);
+
 // ---- wifi_mgr.c ----
 void wifi_mgr_start(void);
 bool wifi_mgr_wait_connected(uint32_t timeout_ms);

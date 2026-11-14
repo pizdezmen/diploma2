@@ -10,18 +10,13 @@
 #include "esp_random.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
-#include "secrets.h"
+#include "dm_secrets.h"
 #include "dm.h"
 
 static const char *TAG = "wifi";
 
 #define BIT_CONNECTED BIT0
 
-typedef struct { const char *ssid; const char *pass; } net_t;
-static const net_t s_nets[] = {
-    { DM_WIFI_PRIMARY_SSID, DM_WIFI_PRIMARY_PASS },
-    { DM_WIFI_BACKUP_SSID,  DM_WIFI_BACKUP_PASS  },
-};
 
 static EventGroupHandle_t s_ev;
 static esp_netif_t *s_netif;
@@ -29,20 +24,22 @@ static esp_timer_handle_t s_retry_timer;
 static int s_net;
 static int s_fails;
 
-static bool net_valid(int i) { return s_nets[i].ssid[0] != '\0'; }
+#define NET(i) (netcfg()->wifi[i])
+
+static bool net_valid(int i) { return NET(i).ssid[0] != '\0'; }
 
 static void apply_net(int i)
 {
     wifi_config_t cfg = { 0 };
-    strlcpy((char *)cfg.sta.ssid, s_nets[i].ssid, sizeof(cfg.sta.ssid));
-    strlcpy((char *)cfg.sta.password, s_nets[i].pass, sizeof(cfg.sta.password));
+    strlcpy((char *)cfg.sta.ssid, NET(i).ssid, sizeof(cfg.sta.ssid));
+    strlcpy((char *)cfg.sta.password, NET(i).pass, sizeof(cfg.sta.password));
     // Кілька точок доступу з однією назвою: обираємо найсильнішу.
     cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-    cfg.sta.threshold.authmode = s_nets[i].pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    cfg.sta.threshold.authmode = NET(i).pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     cfg.sta.pmf_cfg.capable = true;
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
-    ESP_LOGI(TAG, "мережа: %s (%s)", s_nets[i].ssid, i == 0 ? "основна" : "запасна");
+    ESP_LOGI(TAG, "мережа: %s (%s)", NET(i).ssid, i == 0 ? "основна" : "запасна");
 }
 
 static void retry_cb(void *arg) { esp_wifi_connect(); }
@@ -111,6 +108,10 @@ void wifi_mgr_start(void)
     ESP_ERROR_CHECK(esp_timer_create(&ta, &s_retry_timer));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    if (!net_valid(0)) {
+        ESP_LOGW(TAG, "мережу не задано: модуль чекає налаштувань через USB");
+        return;
+    }
     s_net = 0;
     apply_net(s_net);
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -142,4 +143,4 @@ void wifi_mgr_ip(char *buf, size_t len)
     }
 }
 
-const char *wifi_mgr_ssid(void) { return s_nets[s_net].ssid; }
+const char *wifi_mgr_ssid(void) { return NET(s_net).ssid; }
