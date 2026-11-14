@@ -1,0 +1,68 @@
+# Повна система: база, MQTT-брокер, сервер, веб-інтерфейс.
+# Запуск: скопіювати .env.example у .env, змінити паролі, потім `docker compose up -d --build`.
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: monitor
+      POSTGRES_USER: monitor
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitor -d monitor"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/mosquitto-setup/entrypoint.sh"]
+    environment:
+      MQTT_ADMIN_USER: ${MQTT_ADMIN_USER:-server}
+      MQTT_ADMIN_PASSWORD: ${MQTT_ADMIN_PASSWORD}
+      MQTT_TLS: ${MQTT_TLS:-false}
+    volumes:
+      - ./mosquitto:/mosquitto-setup:ro
+      - mqtt-data:/mosquitto/data
+      - ${MQTT_CERTS_DIR:-./mosquitto/certs}:/mosquitto/certs:ro
+    ports:
+      # Зовнішній порт для модулів. Усередині контейнера це завжди 8883 (з TLS або без, див. MQTT_TLS).
+      - "${MQTT_PUBLIC_PORT:-1883}:8883"
+
+  server:
+    build: ./server
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_DSN: postgresql://monitor:${DB_PASSWORD}@db:5432/monitor
+      MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+    volumes:
+      - firmware:/data/firmware
+    depends_on:
+      db:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - caddy-data:/data
+    depends_on:
+      - server
+
+volumes:
+  db-data:
+  mqtt-data:
+  firmware:
+  caddy-data:
