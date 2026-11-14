@@ -1,0 +1,8 @@
+# Файли, що виконуються в Linux-контейнерах, завжди з LF (інакше на Windows з core.autocrlf=true скрипти падають)
+*.sh          text eol=lf
+*.conf        text eol=lf
+Caddyfile     text eol=lf
+Dockerfile    text eol=lf
+*.sql         text eol=lf
+*.py          text eol=lf
+.env.example  text eol=lf
