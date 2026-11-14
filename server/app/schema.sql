@@ -105,6 +105,9 @@ CREATE TABLE IF NOT EXISTS firmware (
     uploaded_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- app: файл застосунку для OTA; full: повний образ (завантажувач + розділи + застосунок) для прошивання з сайту з адреси 0
+ALTER TABLE firmware ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'app';
+
 CREATE TABLE IF NOT EXISTS commands (
     id          text PRIMARY KEY,
     module_id   text NOT NULL,

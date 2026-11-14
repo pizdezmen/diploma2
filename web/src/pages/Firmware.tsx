@@ -45,12 +45,12 @@ export function FirmwarePage() {
         <input type="file" accept=".bin" ref={file} />
         <input placeholder="Примітка" value={note} onChange={(e) => setNote(e.target.value)} style={{ width: 260 }} />
         <button className="primary" disabled={busy} onClick={upload}>Завантажити</button>
-        <span className="info">Файл застосунку з папки build/ (не merged-образ). Чип і версія читаються з файла.</span>
+        <span className="info">Для оновлення по Wi-Fi: build/dm_module.bin. Для «Додати модуль»: повний образ з idf.py merge-bin. Тип, чип і версія визначаються з файла.</span>
       </div>
       <table className="grid">
         <thead>
           <tr>
-            <th>Чип</th><th>Версія</th><th>Файл</th><th>Проєкт</th><th>ESP-IDF</th><th>Зібрано</th><th className="num">Розмір</th>
+            <th>Чип</th><th>Призначення</th><th>Версія</th><th>Файл</th><th>Проєкт</th><th>ESP-IDF</th><th>Зібрано</th><th className="num">Розмір</th>
             <th className="num">Модулів на ній</th><th>SHA-256</th><th>Примітка</th><th>Завантажено</th><th />
           </tr>
         </thead>
@@ -58,20 +58,21 @@ export function FirmwarePage() {
           {(list.data ?? []).map((f) => (
             <tr key={f.id}>
               <td>{f.chip}</td>
+              <td>{f.kind === "full" ? "повний образ (USB)" : "оновлення (OTA)"}</td>
               <td>{f.version}</td>
               <td>{f.filename}</td>
               <td>{f.project}</td>
               <td>{f.idf}</td>
               <td>{f.build_time}</td>
               <td className="num">{fmtBytes(f.size)}</td>
-              <td className="num">{mods.filter((m) => m.chip === f.chip && m.fw === f.version).length}</td>
+              <td className="num">{f.kind === "app" ? mods.filter((m) => m.chip === f.chip && m.fw === f.version).length : ""}</td>
               <td className="mono" title={f.sha256}>{f.sha256.slice(0, 12)}…</td>
               <td className="wrap">{f.note}</td>
               <td>{fmtTime(f.uploaded_at)}</td>
               <td><button className="small danger" onClick={() => del(f)}>Видалити</button></td>
             </tr>
           ))}
-          {list.data?.length === 0 && <tr><td colSpan={12} className="muted">Прошивок ще немає</td></tr>}
+          {list.data?.length === 0 && <tr><td colSpan={13} className="muted">Прошивок ще немає</td></tr>}
         </tbody>
       </table>
       <p className="note">Оновлення запускається на сторінці модуля, у таблиці модулів (для вибраних) або на сторінці груп.</p>

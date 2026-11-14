@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
 import { api, setUnauthorizedHandler } from "./api";
 import { live, useLive } from "./live";
@@ -10,6 +10,8 @@ import { GroupsPage } from "./pages/Groups";
 import { FirmwarePage } from "./pages/Firmware";
 import { EventsPage } from "./pages/Events";
 import { SettingsPage } from "./pages/Settings";
+// esptool-js великий, тому сторінку додавання завантажуємо лише коли її відкрили
+const AddModulePage = lazy(() => import("./pages/AddModule").then((m) => ({ default: m.AddModulePage })));
 
 export function App() {
   const [user, setUser] = useState<string | null | undefined>(undefined);
@@ -47,6 +49,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<ModulesPage />} />
           <Route path="/modules/:id" element={<ModulePage />} />
+          <Route path="/add" element={<Suspense fallback={<div className="note">Завантаження…</div>}><AddModulePage /></Suspense>} />
           <Route path="/groups" element={<GroupsPage />} />
           <Route path="/firmware" element={<FirmwarePage />} />
           <Route path="/events" element={<EventsPage />} />
@@ -67,6 +70,7 @@ function TopBar({ onLogout }: { onLogout: () => void }) {
       <span className="brand">Моніторинг</span>
       <nav>
         <NavLink to="/" end>Модулі</NavLink>
+        <NavLink to="/add">Додати модуль</NavLink>
         <NavLink to="/groups">Групи</NavLink>
         <NavLink to="/firmware">Прошивки</NavLink>
         <NavLink to="/events">Події</NavLink>

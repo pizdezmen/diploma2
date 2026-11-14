@@ -114,3 +114,5 @@ table.kv th { position: static; width: 190px; }
 .progress > div { height: 100%; background: var(--accent); }
 .toast { position: fixed; bottom: 12px; right: 12px; background: var(--panel-2); border: 1px solid var(--border); padding: 8px 12px; max-width: 420px; z-index: 10; }
 .toast.err { border-color: var(--alarm); }
+pre.log { background: var(--panel); border: 1px solid var(--border); padding: 8px; max-height: 260px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
+.ok-text { color: var(--ok); }

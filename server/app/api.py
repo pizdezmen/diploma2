@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from . import auth, db
 from .config import settings
-from .firmware import FirmwareError, parse_app_image
+from .firmware import FirmwareError, parse_image
 from .hub import hub
 from .mqtt import ID_RE, mqtt, public_command, public_module
 
@@ -249,6 +249,8 @@ async def _prepare(mid: str, name: str, params: dict) -> dict:
         fw = await db.p().fetchrow("SELECT * FROM firmware WHERE id = $1", int(params.get("firmware_id") or 0))
         if not fw:
             raise HTTPException(400, "Прошивку не знайдено")
+        if fw["kind"] != "app":
+            raise HTTPException(400, "Це повний образ для прошивання через USB, для оновлення по Wi-Fi потрібен файл застосунку")
         chip = mqtt.modules.get(mid, {}).get("chip")
         if chip and chip != fw["chip"]:
             raise HTTPException(400, f"Прошивка для {fw['chip']}, а модуль {chip}")
@@ -396,10 +398,10 @@ async def list_firmware():
 @api.post("/firmware")
 async def upload_firmware(file: UploadFile = File(...), note: str = Form("")):
     data = await file.read()
-    if len(data) > 8 * 1024 * 1024:
-        raise HTTPException(400, "Файл більший за 8 МБ")
+    if len(data) > 16 * 1024 * 1024:
+        raise HTTPException(400, "Файл більший за 16 МБ")
     try:
-        info = parse_app_image(data)
+        info = parse_image(data)
     except FirmwareError as e:
         raise HTTPException(400, str(e))
     if info["chip"] not in ("esp32s3", "esp32c3"):
@@ -412,10 +414,10 @@ async def upload_firmware(file: UploadFile = File(...), note: str = Form("")):
         raise HTTPException(400, "Такий файл уже завантажено")
     os.makedirs(settings.firmware_dir, exist_ok=True)
     r = await db.p().fetchrow(
-        "INSERT INTO firmware (filename, chip, version, project, idf, build_time, size, sha256, token, note) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *",
+        "INSERT INTO firmware (filename, chip, version, project, idf, build_time, size, sha256, token, note, kind) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *",
         (file.filename or "firmware.bin")[:200], info["chip"], info["version"], info["project"], info["idf"],
-        info["build_time"], len(data), sha, secrets.token_urlsafe(24), note[:500])
+        info["build_time"], len(data), sha, secrets.token_urlsafe(24), note[:500], info["kind"])
     with open(os.path.join(settings.firmware_dir, f"{r['id']}.bin"), "wb") as f:
         f.write(data)
     return {k: v for k, v in dict(r).items() if k != "token"}
@@ -429,6 +431,30 @@ async def delete_firmware(fid: int):
     except FileNotFoundError:
         pass
     return {"ok": True}
+
+
+@api.get("/firmware/{fid}/file")
+async def firmware_file(fid: int):
+    """Файл прошивки для сайту (прошивання через USB)."""
+    r = await db.p().fetchrow("SELECT * FROM firmware WHERE id = $1", fid)
+    if not r:
+        raise HTTPException(404, "Не знайдено")
+    return FileResponse(os.path.join(settings.firmware_dir, f"{fid}.bin"), media_type="application/octet-stream",
+                        filename=r["filename"])
+
+
+@api.get("/provisioning")
+async def provisioning():
+    """Значення, які сайт записує в модуль під час додавання (docs/PROTOCOL.md, розділ 6)."""
+    from urllib.parse import urlparse
+    url = settings.public_url.rstrip("/")
+    return {
+        "server_url": url,
+        "mqtt_host": settings.mqtt_public_host or urlparse(url).hostname or "",
+        "mqtt_port": settings.mqtt_public_port,
+        "mqtt_tls": settings.mqtt_tls,
+        "token": settings.provision_token,
+    }
 
 
 @public.get("/firmware/{fid}/download")
