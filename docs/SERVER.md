@@ -22,7 +22,7 @@ docker compose up -d --build
 - Для прошивки модулів: `SERVER_URL` = той самий `PUBLIC_URL`, MQTT = `<IP ПК>:1883` без TLS, `PROVISION_TOKEN` = як у `.env`.
 - Брандмауер Windows має пропускати вхідні 8080 і 1883.
 - Якщо порт 8080 або 1883 уже зайнятий іншою програмою, змініть `HTTP_PORT` або `MQTT_PUBLIC_PORT` у `.env` (і `PUBLIC_URL` відповідно), наприклад `HTTP_PORT=8090`.
-- Якщо репозиторій клоновано до появи `.gitattributes` і брокер падає з «set: illegal option -», оновіть файли: `git rm --cached -r . -q` і `git reset --hard` (скрипти мають бути з закінченнями рядків LF).
+- Якщо репозиторій клоновано до появи `.gitattributes` і брокер падає з «set: illegal option -», після `git pull` видаліть `mosquitto/entrypoint.sh` і відновіть його командою `git checkout -- mosquitto/entrypoint.sh` (тоді він буде з закінченнями рядків LF).
 
 Модуль з'являється в таблиці сам після першого підключення (реєстрація описана в `docs/PROTOCOL.md`).
 
