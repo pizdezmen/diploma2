@@ -1,0 +1,12 @@
+# SITE_ADDRESS=":80" — звичайний HTTP; доменне ім'я — автоматичний HTTPS (Let's Encrypt).
+{$SITE_ADDRESS::80} {
+	encode gzip
+	handle /api/* {
+		reverse_proxy server:8000
+	}
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
