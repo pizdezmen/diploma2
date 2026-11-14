@@ -64,7 +64,7 @@ export function GroupsPage() {
         <span className="info">Для дій над групою оберіть прошивку:</span>
         <select value={fwId} onChange={(e) => setFwId(e.target.value)}>
           <option value="">Прошивка…</option>
-          {firmware.data?.map((f) => (
+          {firmware.data?.filter((f) => f.kind === "app").map((f) => (
             <option key={f.id} value={f.id}>{f.chip} {f.version} ({f.filename})</option>
           ))}
         </select>

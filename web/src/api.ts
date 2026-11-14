@@ -97,6 +97,7 @@ export interface Firmware {
   size: number;
   sha256: string;
   note: string;
+  kind: "app" | "full";
   uploaded_at: string;
 }
 

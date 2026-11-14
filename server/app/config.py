@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     mqtt_tls: bool = False
     mqtt_public_port: int = 1883
     provision_token: str = "provision"
+    # Хост MQTT, який записується в модулі; порожньо = хост із PUBLIC_URL
+    mqtt_public_host: str = ""
 
     public_url: str = "http://localhost:8080"
     firmware_dir: str = "/data/firmware"

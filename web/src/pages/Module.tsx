@@ -54,7 +54,7 @@ export function ModulePage() {
     return <div className="note">{l.modules.size ? "Модуль не знайдено" : "Завантаження…"}</div>;
   }
   const st = linkState({ ...m, effective_interval_s: detail.data?.effective_interval_s }, now);
-  const fwList = (firmware.data ?? []).filter((f) => !m.chip || f.chip === m.chip);
+  const fwList = (firmware.data ?? []).filter((f) => f.kind === "app" && (!m.chip || f.chip === m.chip));
 
   async function cmd(name: string, params: any = {}) {
     try {

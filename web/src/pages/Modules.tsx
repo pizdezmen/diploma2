@@ -125,6 +125,8 @@ export function ModulesPage() {
           <option value="problem">З проблемами</option>
         </select>
         <span className="info">Показано {rows.length} з {l.modules.size}</span>
+        <span className="spacer" style={{ flex: 1 }} />
+        <Link to="/add"><button className="primary">Додати модуль</button></Link>
       </div>
 
       <div className="toolbar">
@@ -139,7 +141,7 @@ export function ModulesPage() {
         <span className="sep" />
         <select value={fwId} onChange={(e) => setFwId(e.target.value)}>
           <option value="">Прошивка…</option>
-          {firmware.data?.map((f) => (
+          {firmware.data?.filter((f) => f.kind === "app").map((f) => (
             <option key={f.id} value={f.id}>{f.chip} {f.version} ({f.filename})</option>
           ))}
         </select>
@@ -205,7 +207,7 @@ export function ModulesPage() {
           {rows.length === 0 && (
             <tr>
               <td colSpan={13} className="muted">
-                {l.modules.size === 0 ? "Модулів ще немає. Модуль з'явиться тут сам після першого підключення." : "Нічого не знайдено"}
+                {l.modules.size === 0 ? "Модулів ще немає. Натисніть «Додати модуль», щоб прошити й підключити плату через USB." : "Нічого не знайдено"}
               </td>
             </tr>
           )}
