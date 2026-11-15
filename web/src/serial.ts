@@ -2,6 +2,19 @@
 import { ESPLoader, Transport } from "esptool-js";
 
 export const ESPRESSIF_VID = 0x303a;
+/** Вбудований USB Serial/JTAG (S3, C3): так плата видна з нашою прошивкою і з порожньою flash. */
+export const PID_USB_JTAG = 0x1001;
+/** Завантажувач ROM через USB-OTG (S2/S3 у режимі прошивання). */
+export const PID_ROM_OTG = 0x0002;
+
+/** Як плата видна на USB: від цього залежить, чи можна прошити без кнопок. */
+export function portKind(port: SerialPort): "jtag" | "rom" | "other" | "foreign" {
+  const i = port.getInfo();
+  if (i.usbVendorId !== ESPRESSIF_VID) return "foreign";
+  if (i.usbProductId === PID_USB_JTAG) return "jtag";
+  if (i.usbProductId === PID_ROM_OTG) return "rom";
+  return "other"; // напр. 0x4001: заводська прошивка з USB CDC (TinyUSB), автоматичний вхід у завантажувач не працює
+}
 
 export function serialSupported() {
   return typeof navigator !== "undefined" && "serial" in navigator;
@@ -82,7 +95,10 @@ export async function reopenPort(old: SerialPort, timeoutMs = 20000): Promise<Se
     const candidates = [old, ...(await navigator.serial.getPorts()).filter((p) => p !== old)];
     for (const p of candidates) {
       const pi = p.getInfo();
-      if (p !== old && (pi.usbVendorId !== info.usbVendorId || pi.usbProductId !== info.usbProductId)) continue;
+      // та сама плата, або (після прошивання з режиму завантажувача) вона ж уже як USB Serial/JTAG
+      const same = pi.usbVendorId === info.usbVendorId && pi.usbProductId === info.usbProductId;
+      const asJtag = pi.usbVendorId === ESPRESSIF_VID && pi.usbProductId === PID_USB_JTAG;
+      if (p !== old && !same && !asJtag) continue;
       try {
         await openForApp(p);
         return p;
