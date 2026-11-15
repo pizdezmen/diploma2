@@ -37,6 +37,9 @@ class MqttService:
         self.pending_dynsec: dict[str, asyncio.Future] = {}
         self.stats = {"messages": 0, "rows": 0, "dropped": 0}
         self._tasks: list[asyncio.Task] = []
+        # Дані для екранів (PROTOCOL.md 3.7.3): повідомлення правил і що вже надіслано кожному модулю
+        self.screen_msgs: dict[str, dict[int, tuple[str, float | None]]] = {}  # модуль → місце → (текст, до коли)
+        self.screen_sent: dict[str, dict] = {}
 
     # ---------- запуск ----------
     async def start(self) -> None:
@@ -49,6 +52,7 @@ class MqttService:
             asyncio.create_task(self._latest_pusher(), name="latest"),
             asyncio.create_task(self._command_watchdog(), name="cmd-watchdog"),
             asyncio.create_task(self._silence_watchdog(), name="silence-watchdog"),
+            asyncio.create_task(self._screen_pusher(), name="screen"),
         ]
 
     async def stop(self) -> None:
@@ -313,6 +317,8 @@ class MqttService:
         sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
         await db.p().execute(f"UPDATE modules SET {sets} WHERE id = $1", mid, *fields.values())
         m.update(fields)
+        # Після (пере)підключення модуль міг забути дані для екранів: надішлемо заново
+        self.screen_sent.pop(mid, None)
         if online and not was_online:
             await db.add_event(mid, f"На зв'язку (прошивка {m.get('fw') or '?'})")
             # Модуль щойно підключився: переконаємося, що він має актуальну конфігурацію
@@ -439,6 +445,48 @@ class MqttService:
                         hub.broadcast({"type": "module", "data": public_module(m)})
             except Exception:
                 log.exception("silence watchdog")
+
+    # ---------- дані з сервера на екранах модулів ----------
+    def set_screen_message(self, mid: str, slot: int, text: str, duration_s: int = 0) -> None:
+        """Повідомлення правила на місце slot екранів модуля mid; порожній текст прибирає його."""
+        msgs = self.screen_msgs.setdefault(mid, {})
+        if text:
+            msgs[slot] = (text, time.time() + duration_s if duration_s else None)
+        else:
+            msgs.pop(slot, None)
+
+    def screen_values(self, mid: str, m: dict) -> dict[str, str]:
+        now = time.time()
+        msgs = self.screen_msgs.get(mid) or {}
+        for slot in [k for k, (_, until) in msgs.items() if until is not None and until <= now]:
+            del msgs[slot]
+        out = {}
+        for key, item in modcfg.screen_keys(m).items():
+            if item.src == "@msg":
+                text = msgs.get(item.slot, ("", None))[0]
+            else:
+                src = self.modules.get(item.module or "") or {}
+                v = (src.get("last_values") or {}).get(item.metric) if src.get("online") else None
+                text = modcfg.screen_value(item.metric or "", v)
+            out[key] = modcfg.clip_utf8(text, 127)
+        return out
+
+    async def _screen_pusher(self) -> None:
+        """Раз на секунду надсилає модулям із екранами дані з сервера, якщо вони змінилися."""
+        while True:
+            await asyncio.sleep(1)
+            try:
+                for mid, m in list(self.modules.items()):
+                    if not m.get("online") or "screen_data" not in (m.get("caps") or []):
+                        continue
+                    values = self.screen_values(mid, m)
+                    if not values and mid not in self.screen_sent:
+                        continue
+                    if values != self.screen_sent.get(mid):
+                        if await self.publish(f"dm/v1/{mid}/cmd", {"name": "screen", "params": {"values": values}}, qos=1):
+                            self.screen_sent[mid] = values
+            except Exception:
+                log.exception("screen pusher")
 
     # ---------- команди й конфігурація ----------
     async def effective_interval(self, mid: str) -> int:

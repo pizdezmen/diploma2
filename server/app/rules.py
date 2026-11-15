@@ -9,6 +9,9 @@
                         {"type": "schedule", "mode": "every", "every_min": 30}
   actions  що робити:   [{"type": "command", "name": "led", "params": {"mode": "blink"}, "target": null}, ...]
                         [{"type": "command", "name": "restart"}], [{"type": "interval", "interval_s": 10}]
+                        [{"type": "screen", "slot": 1, "text": "{module}: {value}", "duration_s": 0}]
+                            повідомлення на місце 1–4 екранів модуля (пункт «Повідомлення правила»);
+                            порожній текст прибирає повідомлення, duration_s = 0 — до наступного.
                         target = null: модуль, на якому спрацювало правило (для розкладу: усі модулі з scope);
                         target = "<id>": інший модуль.
   recovery_actions      те саме, але після повернення в норму (лише для metric і offline).
@@ -193,6 +196,14 @@ def _action(a: dict) -> dict:
         if a.get("name") == "restart":
             return {"type": "command", "name": "restart", "params": {}, "target": target}
         raise RuleError("Невідома команда")
+    if a.get("type") == "screen":
+        from .modcfg import SCREEN_SLOTS, SCREEN_TEXT_MAX
+        slot = _int(a.get("slot"), 1, 1, SCREEN_SLOTS)
+        text = str(a.get("text") or "").strip()
+        if len(text) > SCREEN_TEXT_MAX:
+            raise RuleError(f"Текст на екран: не більше {SCREEN_TEXT_MAX} символів")
+        return {"type": "screen", "slot": slot, "text": text,
+                "duration_s": _int(a.get("duration_s"), 0, 0, 86400), "target": target}
     if a.get("type") == "interval":
         iv = a.get("interval_s")
         iv = None if iv in (None, "") else _int(iv, 1, 1, 3600)
@@ -482,16 +493,21 @@ class Engine:
                 await self.run_schedule(r)
 
     # ---------- спрацювання ----------
+    @staticmethod
+    def _template(r: dict, tpl: str, mid: str | None, value) -> str:
+        t = r["trigger"]
+        label, unit = METRICS.get(t.get("metric", ""), (t.get("metric", ""), ""))
+        try:
+            return tpl.format(module=_module_title(mid), value=_fmt_num(value), rule=r["name"],
+                              threshold=_fmt_num(t.get("value")), metric=label, unit=unit)
+        except (KeyError, IndexError, ValueError, AttributeError):
+            return tpl
+
     def _text(self, r: dict, mid: str | None, value, recovery: bool = False) -> str:
         t = r["trigger"]
         module = _module_title(mid)
         if r.get("message") and not recovery:
-            label, unit = METRICS.get(t.get("metric", ""), (t.get("metric", ""), ""))
-            try:
-                return r["message"].format(module=module, value=_fmt_num(value), rule=r["name"],
-                                           threshold=_fmt_num(t.get("value")), metric=label, unit=unit)
-            except (KeyError, IndexError, ValueError):
-                return r["message"]
+            return self._template(r, r["message"], mid, value)
         prefix = f"{module}: " if module else ""
         if recovery:
             if t.get("type") == "offline":
@@ -515,7 +531,7 @@ class Engine:
         if not instant:
             st.active = True
             st.cond_since = None
-        results = await self._run_actions(r, r["actions"], [mid])
+        results = await self._run_actions(r, r["actions"], [mid], src=mid, value=st.value)
         await db.p().execute("UPDATE rules SET last_fired_at = now() WHERE id = $1", r["id"])
         r["last_fired_at"] = datetime.now(timezone.utc)
         if r["notify"]:
@@ -534,7 +550,7 @@ class Engine:
         st.active = False
         st.clear_since = None
         text = self._text(r, mid, st.value, recovery=True)
-        results = await self._run_actions(r, r["recovery_actions"], [mid])
+        results = await self._run_actions(r, r["recovery_actions"], [mid], src=mid, value=st.value)
         if st.alert_id:
             await self._close_alert(st.alert_id)
             st.alert_id = None
@@ -561,7 +577,9 @@ class Engine:
             await self._event(None, r, text + results, "info")
         return text + results
 
-    async def _run_actions(self, r: dict, actions: list[dict], mids: list[str]) -> str:
+    async def _run_actions(self, r: dict, actions: list[dict], mids: list[str], src: str | None = None,
+                           value=None) -> str:
+        """src і value — модуль, де спрацювало правило, і значення: для тексту на екран ({module}, {value})."""
         if not actions:
             return ""
         mq = _mqtt()
@@ -581,6 +599,11 @@ class Engine:
                     done += 1
                 elif a["type"] == "interval":
                     await set_interval(mid, a.get("interval_s"))
+                    done += 1
+                elif a["type"] == "screen":
+                    # Без зв'язку теж запам'ятовуємо: модуль отримає повідомлення, щойно підключиться
+                    text = self._template(r, a.get("text") or "", src or mid, value)
+                    mq.set_screen_message(mid, a.get("slot", 1), text, a.get("duration_s", 0))
                     done += 1
         s = f"; дій виконано: {done}"
         if skipped:

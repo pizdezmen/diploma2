@@ -57,7 +57,15 @@ class Limit(BaseModel):
 ADDON_ID = r"^[a-z0-9_-]{1,16}$"
 # Службові пункти, які екран може показати поряд із показниками
 DISPLAY_SERVICE_ITEMS = {"@name", "@id", "@fw", "@ip", "@ssid", "@link"}
+# Пункти з даними, яких немає на самому модулі (PROTOCOL.md 3.7.3):
+#   @text    сталий текст із сайту (модуль отримує його в конфігурації)
+#   @remote  показник іншого модуля (сервер пересилає значення командою screen)
+#   @msg     повідомлення від правила автоматизації, місце 1–4 (дія правила «Вивести на екран»)
+DISPLAY_DATA_ITEMS = {"@text", "@remote", "@msg"}
 DISPLAY_ITEM_SRC = r"^(@[a-z]{1,15}|[a-z0-9_]{1,32})$"
+MODULE_ID = r"^[0-9a-f]{12}$"
+SCREEN_SLOTS = 4
+SCREEN_TEXT_MAX = 60  # символів; на екрані 21 у рядку, великим видом до 6 рядків
 # Короткі підписи й одиниці на екрані 128 px (21 символ у рядку), якщо користувач не задав свої
 DISPLAY_DEFAULTS = {
     "@name": ("Модуль", ""), "@id": ("ID", ""), "@fw": ("Прошивка", ""), "@ip": ("IP", ""),
@@ -71,12 +79,41 @@ class DisplayItem(BaseModel):
     src: str = Field(pattern=DISPLAY_ITEM_SRC)  # назва показника або службовий пункт (@name, @link ...)
     label: str = Field("", max_length=24)       # підпис на екрані; порожньо = назва показника
     unit: str = Field("", max_length=8)
+    text: str = Field("", max_length=SCREEN_TEXT_MAX)  # @text
+    module: str | None = Field(None, pattern=MODULE_ID)  # @remote: чий показник
+    metric: str | None = Field(None, pattern=METRIC)     # @remote: який показник
+    slot: int = Field(1, ge=1, le=SCREEN_SLOTS)          # @msg: місце для повідомлення правила
 
     @model_validator(mode="after")
     def check(self):
-        if self.src.startswith("@") and self.src not in DISPLAY_SERVICE_ITEMS:
+        if self.src.startswith("@") and self.src not in DISPLAY_SERVICE_ITEMS | DISPLAY_DATA_ITEMS:
             raise ValueError(f"невідомий службовий пункт {self.src}")
+        if self.src == "@remote" and (not self.module or not self.metric):
+            raise ValueError("для показника іншого модуля оберіть модуль і показник")
         return self
+
+    def screen_key(self) -> str | None:
+        """Ключ даних, які для цього пункту надсилає сервер (без «$»), або None."""
+        if self.src == "@remote":
+            return f"{self.module}.{self.metric}"
+        if self.src == "@msg":
+            return f"msg{self.slot}"
+        return None
+
+    def wire(self) -> dict:
+        if self.src == "@text":
+            it = {"src": "@text", "label": self.label, "text": self.text}
+        elif key := self.screen_key():
+            label, unit = DISPLAY_DEFAULTS.get(self.metric or "", ("", "")) if self.src == "@remote" else ("", "")
+            it = {"src": "$" + key, "label": self.label or label}
+            if u := (self.unit or unit):
+                it["unit"] = u
+        else:
+            label, unit = DISPLAY_DEFAULTS.get(self.src, (self.src, ""))
+            it = {"src": self.src, "label": self.label or label}
+            if u := (self.unit or unit):
+                it["unit"] = u
+        return it
 
 
 class DisplayAddon(BaseModel):
@@ -107,14 +144,7 @@ class DisplayAddon(BaseModel):
 
     def wire(self) -> dict:
         out = self.model_dump(exclude={"title"})
-        items = []
-        for i in self.items:
-            label, unit = DISPLAY_DEFAULTS.get(i.src, (i.src, ""))
-            it = {"src": i.src, "label": i.label or label}
-            if u := (i.unit or unit):
-                it["unit"] = u
-            items.append(it)
-        out["items"] = items
+        out["items"] = [i.wire() for i in self.items]
         return out
 
 
@@ -182,6 +212,40 @@ def config_extra(m: dict) -> dict:
         if any(i.src == "@name" for a in addons if a.type == "display" for i in a.items):
             out["name"] = m.get("name") or ""
     return out
+
+
+def screen_keys(m: dict) -> dict[str, DisplayItem]:
+    """Які дані з сервера потрібні увімкненим екранам модуля m: ключ → пункт."""
+    out: dict[str, DisplayItem] = {}
+    for a in m.get("addons") or []:
+        if a.get("type") != "display" or a.get("enabled") is False:
+            continue
+        for it in a.get("items") or []:
+            if it.get("src") in ("@remote", "@msg"):
+                try:
+                    item = DisplayItem(**it)
+                except ValueError:
+                    continue
+                out[item.screen_key()] = item
+    return out
+
+
+def screen_value(metric: str, v) -> str:
+    """Значення показника для екрана (одиниці додає сам модуль)."""
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return ""
+    if metric == "uptime_s":
+        s = int(v)
+        d, h, mi = s // 86400, s // 3600 % 24, s // 60 % 60
+        return f"{d}д {h:02d}:{mi:02d}" if d else f"{h:02d}:{mi:02d}:{s % 60:02d}"
+    if float(v).is_integer():
+        return str(int(v))
+    return f"{v:.1f}"
+
+
+def clip_utf8(s: str, max_bytes: int) -> str:
+    b = s.encode()
+    return s if len(b) <= max_bytes else b[:max_bytes].decode("utf-8", "ignore")
 
 
 def config_size(cfg: dict) -> int:

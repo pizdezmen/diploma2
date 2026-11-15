@@ -230,9 +230,52 @@ void addons_module_name(char *buf, size_t len)
     xSemaphoreGive(s_lock);
 }
 
+// ---------- дані з сервера для екранів (PROTOCOL.md 3.7.3) ----------
+// Сервер щоразу надсилає повний набір, тож старі ключі просто зникають.
+#define SRV_MAX     24
+#define SRV_KEY_LEN 48
+#define SRV_VAL_LEN 128
+typedef struct { char key[SRV_KEY_LEN]; char val[SRV_VAL_LEN]; } srv_val_t;
+static srv_val_t *s_srv;
+static int s_srv_n;
+
+void addons_srv_set(const cJSON *values)
+{
+    if (!s_srv) return;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_srv_n = 0;
+    const cJSON *v;
+    cJSON_ArrayForEach(v, values) {
+        if (s_srv_n >= SRV_MAX) break;
+        if (!v->string || !cJSON_IsString(v) || strlen(v->string) >= SRV_KEY_LEN) continue;
+        srv_val_t *e = &s_srv[s_srv_n++];
+        strlcpy(e->key, v->string, sizeof(e->key));
+        strlcpy(e->val, v->valuestring, sizeof(e->val));
+        addons_utf8_fix(e->val);
+    }
+    xSemaphoreGive(s_lock);
+}
+
+bool addons_srv_get(const char *key, char *buf, size_t len)
+{
+    bool found = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < s_srv_n; i++) {
+        if (strcmp(s_srv[i].key, key) == 0) {
+            strlcpy(buf, s_srv[i].val, len);
+            addons_utf8_fix(buf);
+            found = true;
+            break;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return found;
+}
+
 void addons_add_caps(cJSON *caps)
 {
     cJSON_AddItemToArray(caps, cJSON_CreateString("addons"));
+    cJSON_AddItemToArray(caps, cJSON_CreateString("screen_data"));
     for (size_t i = 0; i < N_TYPES; i++) cJSON_AddItemToArray(caps, cJSON_CreateString(TYPES[i]->name));
 }
 
@@ -356,6 +399,7 @@ static void task(void *arg)
 void addons_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
+    s_srv = calloc(SRV_MAX, sizeof(srv_val_t));
     esp_reset_reason_t rr = esp_reset_reason();
     bool wdt = rr == ESP_RST_TASK_WDT || rr == ESP_RST_INT_WDT || rr == ESP_RST_WDT || rr == ESP_RST_PANIC;
     if (wdt && s_guard_magic == GUARD_MAGIC) {
