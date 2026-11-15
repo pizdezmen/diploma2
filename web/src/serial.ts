@@ -203,3 +203,25 @@ export class LineLink {
     await this.port.close().catch(() => {});
   }
 }
+
+export interface BoardInfo {
+  ok: boolean;
+  id: string;
+  chip: string;
+  fw: string;
+  configured: boolean;
+}
+
+/** Коротко питає плату {"cmd":"info"} і закриває порт. null: не відповіла (порожня плата, інша прошивка або в завантажувачі). */
+export async function probeBoard(port: SerialPort, totalMs = 3500): Promise<BoardInfo | null> {
+  if (port.readable) return null; // порт уже відкритий кимось
+  await openForApp(port);
+  const link = new LineLink(port, () => {});
+  link.start();
+  try {
+    const r = await link.request({ cmd: "info" }, 1000, totalMs);
+    return r?.ok ? (r as BoardInfo) : null;
+  } finally {
+    await link.close();
+  }
+}
