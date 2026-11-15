@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { api, Firmware, Group } from "../api";
 import { useFetch } from "../hooks";
 import { live } from "../live";
-import { detectChip, ESPRESSIF_VID, flashImage, LineLink, openForApp, reopenPort, resetAndClose, serialSupported } from "../serial";
+import { BoardInfo, detectChip, ESPRESSIF_VID, flashImage, LineLink, openForApp, probeBoard, reopenPort, resetAndClose, serialSupported } from "../serial";
+import { fmtAgo, moduleTitle } from "../format";
+import { useLive } from "../live";
 
 interface Wifi {
   ssid: string;
@@ -45,7 +47,14 @@ const STEP_TEXT: Record<Step, string> = {
   error: "Помилка",
 };
 
+interface KnownPort {
+  port: SerialPort;
+  state: "checking" | "ours" | "silent" | "error";
+  info?: BoardInfo;
+}
+
 export function AddModulePage() {
+  const l = useLive();
   const groups = useFetch<{ groups: Group[] }>("/groups");
   const firmware = useFetch<Firmware[]>("/firmware");
   const prov = useFetch<Provisioning>("/provisioning");
@@ -74,8 +83,54 @@ export function AddModulePage() {
   const latest = (chip: string) =>
     fulls.filter((f) => f.chip === chip).sort((a, b) => b.uploaded_at.localeCompare(a.uploaded_at))[0];
 
-  async function run() {
+  const [ports, setPorts] = useState<KnownPort[]>([]);
+  const busyRef = useRef(false);
+  busyRef.current = busy;
+
+  /** Перевіряє плати, до яких браузер уже має дозвіл: чи на них наша прошивка і чи вони вже в системі. */
+  async function refreshPorts() {
+    if (busyRef.current || !serialSupported()) return;
+    const list = (await navigator.serial.getPorts()).filter((p) => allPorts || p.getInfo().usbVendorId === ESPRESSIF_VID);
+    setPorts(list.map((port) => ({ port, state: "checking" })));
+    for (const port of list) {
+      if (busyRef.current) return;
+      let item: KnownPort;
+      try {
+        const info = await probeBoard(port);
+        item = info ? { port, state: "ours", info } : { port, state: "silent" };
+      } catch {
+        item = { port, state: "error" };
+      }
+      setPorts((cur) => cur.map((x) => (x.port === port ? item : x)));
+    }
+  }
+
+  useEffect(() => {
+    if (!serialSupported()) return;
+    refreshPorts();
+    const onChange = () => setTimeout(refreshPorts, 1500);
+    navigator.serial.addEventListener("connect", onChange);
+    navigator.serial.addEventListener("disconnect", onChange);
+    return () => {
+      navigator.serial.removeEventListener("connect", onChange);
+      navigator.serial.removeEventListener("disconnect", onChange);
+    };
+  }, [allPorts]);
+
+  function boardStatus(k: KnownPort): { text: string; cls: string } {
+    if (k.state === "checking") return { text: "перевіряю…", cls: "muted" };
+    if (k.state === "error") return { text: "порт зайнятий іншою програмою", cls: "warn" };
+    if (k.state === "silent") return { text: "не відповідає: порожня плата, інша прошивка або потрібен RST", cls: "" };
+    const m = k.info && l.modules.get(k.info.id);
+    if (!m) return { text: "нова плата з нашою прошивкою, ще не в системі", cls: "" };
+    return m.online
+      ? { text: `уже в системі: ${moduleTitle(m)}, на зв'язку`, cls: "ok" }
+      : { text: `уже в системі: ${moduleTitle(m)}, немає зв'язку (останні дані ${fmtAgo(m.last_seen_at)})`, cls: "warn" };
+  }
+
+  async function run(chosen?: SerialPort, skipOverride?: boolean) {
     if (!prov.data) return;
+    let skip = skipOverride ?? skipFlash;
     const nets = wifi.filter((w) => w.ssid.trim());
     try {
       if (remember) localStorage.setItem(STORE_KEY, JSON.stringify(wifi));
@@ -92,9 +147,23 @@ export function AddModulePage() {
     let link: LineLink | null = null;
     try {
       setStep("port");
-      port = await navigator.serial.requestPort(allPorts ? {} : { filters: [{ usbVendorId: ESPRESSIF_VID }] });
+      port = chosen ?? (await navigator.serial.requestPort(allPorts ? {} : { filters: [{ usbVendorId: ESPRESSIF_VID }] }));
 
-      if (!skipFlash) {
+      if (!skip) {
+        // Якщо на платі вже остання прошивка, пропонуємо не перепрошувати
+        const b = await probeBoard(port, 2500).catch(() => null);
+        if (b) {
+          setInfo((i) => ({ ...i, id: b.id, chip: b.chip, fw: b.fw }));
+          const fw = latest(b.chip);
+          const m = live.modules.get(b.id);
+          const where = m ? `Плата вже в системі як «${moduleTitle(m)}». ` : "";
+          if (fw && fw.version === b.fw && confirm(`${where}На платі вже остання прошивка ${b.fw}. Не перепрошувати, лише записати налаштування?`)) {
+            skip = true;
+          }
+        }
+      }
+
+      if (!skip) {
         setStep("detect");
         const { chip, loader, transport } = await detectChip(port, { log: addLog, progress: setProgress });
         setInfo((i) => ({ ...i, chip }));
@@ -189,6 +258,7 @@ export function AddModulePage() {
         await api(`/modules/${id}`, { method: "PATCH", body });
       }
       setStep("done");
+      setTimeout(refreshPorts, 500);
     } catch (e: any) {
       if (e?.name === "NotFoundError") {
         setStep("idle"); // користувач закрив вікно вибору порту
@@ -211,7 +281,8 @@ export function AddModulePage() {
     );
   }
 
-  const canRun = !busy && prov.data && wifi[0].ssid.trim() && (skipFlash || fulls.length > 0);
+  const canConfigure = !busy && !!prov.data && !!wifi[0].ssid.trim();
+  const canRun = canConfigure && (skipFlash || fulls.length > 0);
   return (
     <div style={{ maxWidth: 900 }}>
       <h1>Додати модуль</h1>
@@ -272,8 +343,42 @@ export function AddModulePage() {
         <p className="note">Спершу завантажте повний образ (файл з idf.py merge-bin) на сторінці <Link to="/firmware">«Прошивки»</Link>.</p>
       )}
 
+      <h2>Плати, підключені до цього комп'ютера раніше</h2>
+      <table className="grid">
+        <thead>
+          <tr><th>Порт</th><th>Плата</th><th>ID</th><th>Прошивка</th><th>Стан</th><th>Дії</th></tr>
+        </thead>
+        <tbody>
+          {ports.map((k, i) => {
+            const st = boardStatus(k);
+            const pi = k.port.getInfo();
+            const fw = k.info && latest(k.info.chip);
+            return (
+              <tr key={i}>
+                <td className="mono">USB {pi.usbVendorId?.toString(16).padStart(4, "0")}:{pi.usbProductId?.toString(16).padStart(4, "0")}</td>
+                <td>{k.info ? CHIP_TITLE[k.info.chip] ?? k.info.chip : "—"}</td>
+                <td className="mono">{k.info ? (l.modules.has(k.info.id) ? <Link to={`/modules/${k.info.id}`}>{k.info.id}</Link> : k.info.id) : "—"}</td>
+                <td>{k.info ? `${k.info.fw}${fw && fw.version !== k.info.fw ? ` (є ${fw.version})` : ""}` : "—"}</td>
+                <td className={st.cls}>{st.text}</td>
+                <td>
+                  <button className="small" disabled={!canConfigure || fulls.length === 0 || k.state === "checking"} onClick={() => run(k.port, false)}>Прошити</button>{" "}
+                  <button className="small" disabled={!canConfigure || k.state !== "ours"} onClick={() => run(k.port, true)}>Лише налаштування</button>
+                </td>
+              </tr>
+            );
+          })}
+          {ports.length === 0 && (
+            <tr><td colSpan={6} className="muted">Ще немає. Після першого вибору порту плата з'явиться тут, і сайт показуватиме, чи вона вже в системі.</td></tr>
+          )}
+        </tbody>
+      </table>
+      <div className="toolbar" style={{ marginTop: 6 }}>
+        <button className="small" disabled={busy} onClick={refreshPorts}>Перевірити ще раз</button>
+        <span className="note">Вікно вибору порту браузера змінити не можна, тому стан плат показано тут.</span>
+      </div>
+
       <div className="toolbar" style={{ marginTop: 12 }}>
-        <button className="primary" disabled={!canRun} onClick={run}>{skipFlash ? "Вибрати порт і записати налаштування" : "Вибрати порт і прошити"}</button>
+        <button className="primary" disabled={!canRun} onClick={() => run()}>{skipFlash ? "Вибрати порт і записати налаштування" : "Вибрати порт і прошити"}</button>
         {step !== "idle" && (
           <span className={step === "error" ? "err" : "info"}>
             {STEP_TEXT[step]}
