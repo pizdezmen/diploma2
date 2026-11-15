@@ -46,7 +46,8 @@ static const addon_type_t *find_type(const char *name)
     return NULL;
 }
 
-bool addons_gpio_usable(int gpio, char *err, size_t err_len)
+// Вивід, який плата використовує сама (USB, flash, PSRAM) або якого немає.
+static bool board_pin_ok(int gpio, char *err, size_t err_len)
 {
     if (!GPIO_IS_VALID_GPIO(gpio)) {
         snprintf(err, err_len, "GPIO%d не існує на цьому чипі", gpio);
@@ -65,11 +66,25 @@ bool addons_gpio_usable(int gpio, char *err, size_t err_len)
         snprintf(err, err_len, "GPIO%d зайнятий платою (USB, flash або PSRAM)", gpio);
         return false;
     }
-    if (gpio == CONFIG_DM_LED_GPIO) {
+    return true;
+}
+
+bool addons_gpio_usable(int gpio, char *err, size_t err_len)
+{
+    if (!board_pin_ok(gpio, err, err_len)) return false;
+    led_hw_t led;
+    status_led_get_hw(&led, NULL);
+    if (gpio == led.gpio) {
         snprintf(err, err_len, "GPIO%d зайнятий світлодіодом", gpio);
         return false;
     }
     return true;
+}
+
+static bool is_led(const cJSON *it)
+{
+    const cJSON *type = cJSON_GetObjectItem(it, "type");
+    return cJSON_IsString(type) && strcmp(type->valuestring, "led") == 0;
 }
 
 static void destroy_all(void)
@@ -89,7 +104,7 @@ static void create_all(const cJSON *arr)
             ESP_LOGW(TAG, "більше %d доповнень не підтримується", ADDONS_MAX);
             break;
         }
-        if (!cJSON_IsObject(it)) continue;
+        if (!cJSON_IsObject(it) || is_led(it)) continue; // світлодіод вбудований, див. apply_led
         const cJSON *id = cJSON_GetObjectItem(it, "id"), *type = cJSON_GetObjectItem(it, "type");
         slot_t *s = &s_slots[s_count++];
         strlcpy(s->id, cJSON_IsString(id) ? id->valuestring : "?", sizeof(s->id));
@@ -107,6 +122,28 @@ static void create_all(const cJSON *arr)
     }
 }
 
+// Вбудований світлодіод: запис {"type":"led","id":"led",...} змінює лише його підключення.
+// Без запису — підключення за замовчуванням із Kconfig.
+static void apply_led(const cJSON *arr)
+{
+    led_hw_t hw;
+    status_led_default_hw(&hw);
+    const cJSON *it;
+    cJSON_ArrayForEach(it, arr) {
+        const cJSON *type = cJSON_GetObjectItem(it, "type");
+        if (!cJSON_IsString(type) || strcmp(type->valuestring, "led") != 0) continue;
+        const cJSON *drv = cJSON_GetObjectItem(it, "driver"), *g = cJSON_GetObjectItem(it, "gpio");
+        if (cJSON_IsString(drv)) hw.type = strcmp(drv->valuestring, "ws2812") == 0 ? LED_HW_STRIP : LED_HW_GPIO;
+        char err[ADDON_ERR_LEN];
+        if (cJSON_IsNumber(g) && GPIO_IS_VALID_OUTPUT_GPIO(g->valueint) && board_pin_ok(g->valueint, err, sizeof(err))) {
+            hw.gpio = g->valueint;
+        }
+        hw.active_low = cJSON_IsTrue(cJSON_GetObjectItem(it, "active_low"));
+        break;
+    }
+    status_led_configure(&hw);
+}
+
 void addons_apply_config(const char *json, int len)
 {
     cJSON *j = cJSON_ParseWithLength(json, len);
@@ -118,6 +155,7 @@ void addons_apply_config(const char *json, int len)
     const cJSON *arr = cJSON_GetObjectItem(j, "addons");
     char *text = cJSON_IsArray(arr) ? cJSON_PrintUnformatted(arr) : NULL;
 
+    apply_led(arr);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     strlcpy(s_name, cJSON_IsString(name) ? name->valuestring : "", sizeof(s_name));
     bool same = (text == NULL && s_last == NULL) || (text && s_last && strcmp(text, s_last) == 0);
@@ -154,14 +192,19 @@ void addons_add_status(cJSON *status)
     cJSON_AddStringToObject(led, "id", "led");
     cJSON_AddStringToObject(led, "type", "led");
     cJSON_AddBoolToObject(led, "builtin", true);
-    cJSON_AddBoolToObject(led, "ok", true);
-    char hw[32];
-#if CONFIG_DM_LED_TYPE_STRIP
-    snprintf(hw, sizeof(hw), "RGB WS2812, GPIO%d", CONFIG_DM_LED_GPIO);
-#else
-    snprintf(hw, sizeof(hw), "GPIO%d", CONFIG_DM_LED_GPIO);
-#endif
+
+    led_hw_t lh;
+    bool led_ok;
+    status_led_get_hw(&lh, &led_ok);
+    char hw[40];
+    snprintf(hw, sizeof(hw), lh.type == LED_HW_STRIP ? "RGB WS2812, GPIO%d" : "GPIO%d%s", lh.gpio,
+             lh.type == LED_HW_GPIO && lh.active_low ? ", інверсний" : "");
+    cJSON_AddBoolToObject(led, "ok", led_ok);
+    if (!led_ok) cJSON_AddStringToObject(led, "error", "не вдалося запустити світлодіод на цьому виводі");
     cJSON_AddStringToObject(led, "hw", hw);
+    cJSON_AddStringToObject(led, "driver", lh.type == LED_HW_STRIP ? "ws2812" : "gpio");
+    cJSON_AddNumberToObject(led, "gpio", lh.gpio);
+    cJSON_AddBoolToObject(led, "active_low", lh.active_low);
     cJSON_AddStringToObject(led, "state", status_led_mode_str());
     cJSON_AddItemToArray(arr, led);
     xSemaphoreTake(s_lock, portMAX_DELAY);

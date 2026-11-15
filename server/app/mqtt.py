@@ -301,6 +301,7 @@ class MqttService:
                 fields["addon_state"] = [
                     {"id": str(a.get("id", ""))[:16], "type": str(a.get("type", ""))[:16], "ok": a.get("ok") is True,
                      "builtin": a.get("builtin") is True, "hw": str(a.get("hw") or "")[:40],
+                     **{k: a[k] for k in ("driver", "gpio", "active_low", "state") if isinstance(a.get(k), (str, int, bool))},
                      "error": str(a.get("error") or "")[:120]}
                     for a in data["addons"][:8] if isinstance(a, dict)]
             elif "caps" in fields and "addons" not in fields["caps"]:

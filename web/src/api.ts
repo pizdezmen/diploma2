@@ -107,7 +107,16 @@ export interface DisplayAddon {
   cycle_s: number;
   items: DisplayItem[];
 }
-export type Addon = DisplayAddon;
+// Вбудований світлодіод: із сайту лише його підключення; керування — команда led
+export interface LedAddon {
+  type: "led";
+  id: "led";
+  title: string;
+  driver: "gpio" | "ws2812";
+  gpio: number;
+  active_low: boolean;
+}
+export type Addon = DisplayAddon | LedAddon;
 // Стан, який повідомляє модуль; builtin — вбудоване в плату (світлодіод), його не налаштовують із сайту
 export interface AddonState {
   id: string;
@@ -115,6 +124,10 @@ export interface AddonState {
   ok: boolean;
   builtin?: boolean;
   hw?: string;
+  driver?: "gpio" | "ws2812";
+  gpio?: number;
+  active_low?: boolean;
+  state?: string;
   error: string;
 }
 

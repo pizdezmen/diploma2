@@ -113,6 +113,15 @@ bool      ota_busy(void);
 
 // ---- status_led.c ----
 typedef enum { LED_OFF, LED_ON, LED_BLINK } led_mode_t;
+typedef enum { LED_HW_GPIO, LED_HW_STRIP } led_hw_type_t;
+typedef struct {
+    led_hw_type_t type;  // звичайний світлодіод на GPIO або адресний RGB (WS2812)
+    int           gpio;
+    bool          active_low;
+} led_hw_t;
 void        status_led_init(void);
+void        status_led_default_hw(led_hw_t *hw);           // із Kconfig
+void        status_led_configure(const led_hw_t *hw);      // з сайту (доповнення "led")
+void        status_led_get_hw(led_hw_t *hw, bool *ok);
 void        status_led_set(led_mode_t mode);
 const char *status_led_mode_str(void);
