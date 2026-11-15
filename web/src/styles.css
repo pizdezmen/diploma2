@@ -98,6 +98,7 @@ table.kv th { position: static; width: 190px; }
 .form-row label { width: 150px; flex-shrink: 0; color: var(--muted); }
 .err { color: var(--alarm); margin: 6px 0; }
 .note { color: var(--muted); }
+.warn-text { color: var(--warn); margin-top: 4px; }
 .badge { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); }
 .badge.warn { border-color: var(--warn); color: var(--warn); }
 .badge.alarm { border-color: var(--alarm); color: var(--alarm); }
@@ -119,4 +120,3 @@ table.grid td input[type="number"] { width: 80px; }
 .toast.err { border-color: var(--alarm); }
 pre.log { background: var(--panel); border: 1px solid var(--border); padding: 8px; max-height: 260px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
 .ok-text { color: var(--ok); }
-.warn-text { color: var(--warn); margin-top: 4px; }
