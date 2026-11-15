@@ -4,11 +4,12 @@ import uPlot from "uplot";
 import { api, Command, EventRow, Firmware, Group, Module } from "../api";
 import { Chart, SeriesData, withGaps } from "../Chart";
 import {
-  CMD_LABELS, CMD_STATUS, cmdParams, fmtAgo, fmtTime, fmtValue, linkState, metricLabel, moduleTitle, valueLevel,
+  CMD_LABELS, CMD_STATUS, cmdParams, fmtAgo, fmtTime, fmtValue, linkState, metricLabel, metricLevel, moduleTitle,
 } from "../format";
 import { useFetch, useNow } from "../hooks";
 import { live, useLive } from "../live";
 import { toast, toastError } from "../toast";
+import { OnModule } from "./OnModule";
 
 const RANGES = [
   { key: "live", label: "Наживо 5 хв", s: 300 },
@@ -48,7 +49,7 @@ export function ModulePage() {
   // події оновлюємо при зміні стану модуля
   useEffect(() => {
     events.reload();
-  }, [m?.online, m?.fw, m?.provisioned]);
+  }, [m?.online, m?.fw, m?.provisioned, m?.alarms?.join()]);
 
   if (!m) {
     return <div className="note">{l.modules.size ? "Модуль не знайдено" : "Завантаження…"}</div>;
@@ -88,9 +89,12 @@ export function ModulePage() {
           <Maintenance m={m} onDeleted={() => nav("/")} />
         </div>
         <div>
-          <Charts id={id} metrics={detail.data?.metrics ?? Object.keys(m.last_values ?? {})} interval={detail.data?.effective_interval_s ?? 1} />
+          <Charts id={id} metrics={detail.data?.metrics ?? Object.keys(m.last_values ?? {})}
+            interval={Math.max(detail.data?.effective_interval_s ?? 1, m.hybrid?.normal_interval_s ?? 0)} limits={m.limits ?? {}} />
         </div>
       </div>
+
+      <OnModule m={m} interval={detail.data?.effective_interval_s ?? 1} />
 
       <h2>Команди</h2>
       <table className="grid">
@@ -223,7 +227,7 @@ function Properties({ m, detail, groups, onSaved }: { m: Module; detail: Module 
           {["rssi", "chip_temp_c", "uptime_s", "heap_free", ...Object.keys(lv).filter((k) => !METRIC_ORDER.includes(k)).sort()]
             .filter((k) => k in lv)
             .map((k) => {
-              const lvl = m.online ? valueLevel(k, lv[k]) : "none";
+              const lvl = metricLevel(m, k);
               return (
                 <tr key={k}><th>{metricLabel(k)}</th><td className={lvl === "warn" || lvl === "alarm" ? lvl : m.online ? "" : "muted"}>{fmtValue(k, lv[k])}</td></tr>
               );
@@ -273,7 +277,7 @@ function Maintenance({ m, onDeleted }: { m: Module; onDeleted: () => void }) {
   );
 }
 
-function Charts({ id, metrics, interval }: { id: string; metrics: string[]; interval: number }) {
+function Charts({ id, metrics, interval, limits }: { id: string; metrics: string[]; interval: number; limits: Module["limits"] }) {
   const [range, setRange] = useState("live");
   const [series, setSeries] = useState<Record<string, SeriesData>>({});
   const [source, setSource] = useState("raw");
@@ -364,7 +368,7 @@ function Charts({ id, metrics, interval }: { id: string; metrics: string[]; inte
         return (
           <div key={k} className="panel">
             <div className="chart-title">{metricLabel(k)}</div>
-            <Chart metric={k} data={data} xRange={xRange} />
+            <Chart metric={k} data={data} xRange={xRange} limits={limits[k]} />
           </div>
         );
       })}

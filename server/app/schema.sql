@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS modules (
     created_at          timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS modules_group_idx ON modules (group_id);
+-- Етап 2: обробка показників на модулі (docs/PROTOCOL.md 3.5)
+ALTER TABLE modules ADD COLUMN IF NOT EXISTS hybrid  jsonb;                      -- NULL = гібридний режим вимкнено
+ALTER TABLE modules ADD COLUMN IF NOT EXISTS filters jsonb NOT NULL DEFAULT '{}'; -- показник -> фільтр
+ALTER TABLE modules ADD COLUMN IF NOT EXISTS limits  jsonb NOT NULL DEFAULT '{}'; -- показник -> межі норми
+ALTER TABLE modules ADD COLUMN IF NOT EXISTS alarms  jsonb NOT NULL DEFAULT '[]'; -- показники поза нормою (повідомляє модуль)
 
 CREATE TABLE IF NOT EXISTS telemetry (
     time       timestamptz NOT NULL,

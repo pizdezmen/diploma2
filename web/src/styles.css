@@ -100,6 +100,9 @@ table.kv th { position: static; width: 190px; }
 .note { color: var(--muted); }
 .badge { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); }
 .badge.warn { border-color: var(--warn); color: var(--warn); }
+.badge.alarm { border-color: var(--alarm); color: var(--alarm); }
+table.grid td input, table.grid td select { padding: 1px 4px; }
+table.grid td input[type="number"] { width: 80px; }
 .seg button { border-radius: 0; margin-left: -1px; }
 .seg button:first-child { border-radius: 3px 0 0 3px; }
 .seg button:last-child { border-radius: 0 3px 3px 0; }
@@ -116,3 +119,4 @@ table.kv th { position: static; width: 190px; }
 .toast.err { border-color: var(--alarm); }
 pre.log { background: var(--panel); border: 1px solid var(--border); padding: 8px; max-height: 260px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
 .ok-text { color: var(--ok); }
+.warn-text { color: var(--warn); margin-top: 4px; }

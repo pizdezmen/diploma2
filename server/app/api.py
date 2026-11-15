@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import auth, db
+from .modcfg import Filter, Hybrid, Limit, validate_metrics
 from .config import settings
 from .firmware import FirmwareError, parse_image
 from .hub import hub
@@ -124,6 +125,13 @@ class ModulePatch(BaseModel):
     note: str | None = Field(None, max_length=1000)
     group_id: int | None = None
     interval_s: int | None = Field(None, ge=1, le=3600)
+    # Етап 2, обробка на модулі (docs/PROTOCOL.md 3.5); hybrid = null вимикає гібридний режим
+    hybrid: Hybrid | None = None
+    filters: dict[str, Filter] | None = None
+    limits: dict[str, Limit] | None = None
+
+
+MODULE_CONFIG_FIELDS = {"interval_s", "group_id", "hybrid", "filters", "limits"}
 
 
 @api.patch("/modules/{mid}")
@@ -136,13 +144,23 @@ async def patch_module(mid: str, body: ModulePatch):
         fields["name"] = ""
     if "note" in fields and fields["note"] is None:
         fields["note"] = ""
+    for k in ("filters", "limits"):
+        if k in fields:
+            d = fields[k] or {}
+            try:
+                validate_metrics(d)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            fields[k] = {name: v.model_dump() for name, v in d.items()}
+    if "hybrid" in fields and fields["hybrid"] is not None:
+        fields["hybrid"] = fields["hybrid"].model_dump()
     sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
     try:
         row = await db.p().fetchrow(f"UPDATE modules SET {sets} WHERE id = $1 RETURNING *", mid, *fields.values())
     except Exception as e:
         raise HTTPException(400, str(e))
     m.update(dict(row))
-    if "interval_s" in fields or "group_id" in fields:
+    if MODULE_CONFIG_FIELDS & fields.keys():
         await mqtt.push_config(mid)
     hub.broadcast({"type": "module", "data": public_module(m)})
     return public_module(m)

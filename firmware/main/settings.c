@@ -1,4 +1,5 @@
 // Збереження у NVS, простір "dm" (PROTOCOL.md 2 і 3.5).
+#include <stdlib.h>
 #include <string.h>
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -52,14 +53,22 @@ void settings_get_config(uint32_t *rev, uint32_t *interval_s)
     nvs_close(h);
 }
 
-esp_err_t settings_set_config(uint32_t rev, uint32_t interval_s)
+// Уся конфігурація з теми config (етап 2) зберігається як рядок JSON.
+char *settings_get_config_json(void)
 {
     nvs_handle_t h;
-    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
-    if (err != ESP_OK) return err;
-    err = nvs_set_u32(h, "cfg_rev", rev);
-    if (err == ESP_OK) err = nvs_set_u32(h, "cfg_interval", interval_s);
-    if (err == ESP_OK) err = nvs_commit(h);
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return NULL;
+    size_t len = 0;
+    char *buf = NULL;
+    if (nvs_get_str(h, "cfg_json", NULL, &len) == ESP_OK && len > 1) {
+        buf = malloc(len);
+        if (buf && nvs_get_str(h, "cfg_json", buf, &len) != ESP_OK) {
+            free(buf);
+            buf = NULL;
+        }
+    }
     nvs_close(h);
-    return err;
+    return buf;
 }
+
+esp_err_t settings_set_config_json(const char *json) { return write_str("cfg_json", json); }
