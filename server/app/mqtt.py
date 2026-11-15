@@ -257,10 +257,18 @@ class MqttService:
         hub.broadcast({"type": "module", "data": public_module(m)})
         try:
             limits = m.get("limits") or {}
+            who = m.get("name") or mid
+            # Тривоги від меж на модулі йдуть і на сторінку «Сповіщення» та в канали (rules.py).
             for k in sorted(set(alarms) - old):
-                await db.add_event(mid, modcfg.alarm_text(k, values.get(k), limits.get(k)), "alarm")
+                text = modcfg.alarm_text(k, values.get(k), limits.get(k))
+                await db.add_event(mid, text, "alarm")
+                v = values.get(k)
+                await rules_engine.raise_external(mid, f"limit:{k}", "alarm", f"{who}: {text}",
+                                                  float(v) if isinstance(v, (int, float)) else None)
             for k in sorted(old - set(alarms)):
-                await db.add_event(mid, modcfg.normal_text(k, values.get(k)))
+                text = modcfg.normal_text(k, values.get(k))
+                await db.add_event(mid, text)
+                await rules_engine.clear_external(mid, f"limit:{k}", f"{who}: {text}")
             await db.p().execute("UPDATE modules SET alarms = $2 WHERE id = $1", mid, alarms)
         except Exception:
             log.exception("Не вдалося записати зміну тривог %s", mid)
