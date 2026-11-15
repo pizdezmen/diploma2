@@ -164,6 +164,25 @@ export interface Command {
   updated_at: string;
 }
 
+export interface BatchItem {
+  module_id: string;
+  state: string;
+  message: string;
+  progress: number | null;
+}
+
+export interface Batch {
+  id: string;
+  name: string;
+  params: any;
+  created_at: string;
+  finished: boolean;
+  cancelled: boolean;
+  total: number;
+  counts: Record<string, number>;
+  items?: BatchItem[];
+}
+
 export interface Firmware {
   id: number;
   filename: string;

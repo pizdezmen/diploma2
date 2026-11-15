@@ -277,12 +277,25 @@ async def _prepare(mid: str, name: str, params: dict) -> dict:
     if name == "restart":
         return {}
     if name == "ota":
-        fw = await db.p().fetchrow("SELECT * FROM firmware WHERE id = $1", int(params.get("firmware_id") or 0))
+        chip = mqtt.modules.get(mid, {}).get("chip")
+        if params.get("version") and not params.get("firmware_id"):
+            # Версію вибрано без файла: беремо файл застосунку під чип цього модуля
+            version = str(params["version"])
+            if not chip:
+                raise HTTPException(400, "Невідомий чип модуля")
+            if mqtt.modules.get(mid, {}).get("fw") == version:
+                raise HTTPException(400, "Вже ця версія")
+            fw = await db.p().fetchrow(
+                "SELECT * FROM firmware WHERE kind = 'app' AND chip = $1 AND version = $2 ORDER BY uploaded_at DESC LIMIT 1",
+                chip, version)
+            if not fw:
+                raise HTTPException(400, f"Немає прошивки {version} для {chip}")
+        else:
+            fw = await db.p().fetchrow("SELECT * FROM firmware WHERE id = $1", int(params.get("firmware_id") or 0))
         if not fw:
             raise HTTPException(400, "Прошивку не знайдено")
         if fw["kind"] != "app":
             raise HTTPException(400, "Це повний образ для прошивання через USB, для оновлення по Wi-Fi потрібен файл застосунку")
-        chip = mqtt.modules.get(mid, {}).get("chip")
         if chip and chip != fw["chip"]:
             raise HTTPException(400, f"Прошивка для {fw['chip']}, а модуль {chip}")
         url = f"{settings.public_url.rstrip('/')}/api/firmware/{fw['id']}/download?token={fw['token']}"
@@ -312,23 +325,64 @@ class BulkIn(BaseModel):
     params: dict = {}
 
 
-async def _run_waves(batch_id: str, jobs: list[tuple[str, dict]], name: str, wave: int) -> None:
-    for i in range(0, len(jobs), wave):
-        chunk = jobs[i:i + wave]
-        ids = []
-        for mid, params in chunk:
-            if mqtt.modules.get(mid, {}).get("online"):
-                c = await mqtt.send_command(mid, name, params, batch_id)
-                ids.append(c["id"])
-        if name != "ota" or not ids:
-            continue
-        # Наступна хвиля OTA лише після завершення попередньої
-        while True:
-            left = await db.p().fetchval(
-                "SELECT count(*) FROM commands WHERE id = ANY($1) AND status IN ('sent', 'in_progress')", ids)
-            if not left:
+# Пакети масових команд (у пам'яті сервера): стан кожного модуля, щоб інтерфейс показував хід.
+# Стан елемента: waiting, sent/in_progress/ok/error/timeout (з команди), offline, skipped, cancelled.
+batches: dict[str, dict] = {}
+BATCHES_KEEP = 20
+
+
+def _batch_public(b: dict, cmds: dict[str, dict] | None = None) -> dict:
+    items = []
+    for it in b["items"]:
+        out = {"module_id": it["module_id"], "state": it["state"], "message": it.get("message", ""), "progress": None}
+        c = (cmds or {}).get(it.get("command_id") or "")
+        if c:
+            out.update(state=c["status"], message=c["message"] or "", progress=c["progress"])
+        items.append(out)
+    counts: dict[str, int] = {}
+    for it in items:
+        counts[it["state"]] = counts.get(it["state"], 0) + 1
+    return {k: b[k] for k in ("id", "name", "params", "created_at", "finished", "cancelled")} | {
+        "total": len(items), "counts": counts, "items": items}
+
+
+async def _batch_with_commands(b: dict) -> dict:
+    ids = [it["command_id"] for it in b["items"] if it.get("command_id")]
+    rows = await db.p().fetch("SELECT * FROM commands WHERE id = ANY($1)", ids) if ids else []
+    return _batch_public(b, {r["id"]: public_command(r) for r in rows})
+
+
+async def _run_waves(b: dict, name: str, wave: int) -> None:
+    todo = [it for it in b["items"] if it["state"] == "waiting"]
+    try:
+        for i in range(0, len(todo), wave):
+            if b["cancelled"]:
                 break
+            ids = []
+            for it in todo[i:i + wave]:
+                if not mqtt.modules.get(it["module_id"], {}).get("online"):
+                    it.update(state="offline", message="Не на зв'язку")
+                    continue
+                c = await mqtt.send_command(it["module_id"], name, it["params"], b["id"])
+                it.update(command_id=c["id"], state="sent")
+                ids.append(c["id"])
+            if name != "ota" or not ids:
+                continue
+            # Наступна хвиля OTA лише після завершення попередньої: модулі не перезапускаються разом
+            while True:
+                left = await db.p().fetchval(
+                    "SELECT count(*) FROM commands WHERE id = ANY($1) AND status IN ('sent', 'in_progress')", ids)
+                if not left:
+                    break
+                await asyncio.sleep(3)
             await asyncio.sleep(3)
+    except Exception:
+        log.exception("Пакет команд %s", b["id"])
+    finally:
+        for it in b["items"]:
+            if it["state"] == "waiting" and not it.get("command_id"):
+                it.update(state="cancelled", message="Скасовано")
+        b["finished"] = True
 
 
 @api.post("/commands/bulk")
@@ -336,20 +390,53 @@ async def bulk_command(body: BulkIn):
     ids = set(body.module_ids)
     if body.group_id is not None:
         ids |= {mid for mid, m in mqtt.modules.items() if m.get("group_id") == body.group_id}
-    ids = [i for i in ids if i in mqtt.modules]
+    ids = sorted(i for i in ids if i in mqtt.modules)
     if not ids:
         raise HTTPException(400, "Не вибрано жодного модуля")
-    jobs, skipped = [], []
+    items, skipped = [], []
     for mid in ids:
         try:
-            jobs.append((mid, await _prepare(mid, body.name, body.params)))
+            items.append({"module_id": mid, "state": "waiting", "params": await _prepare(mid, body.name, body.params)})
         except HTTPException as e:
             skipped.append({"id": mid, "reason": e.detail})
-    offline = [mid for mid, _ in jobs if not mqtt.modules[mid].get("online")]
+            items.append({"module_id": mid, "state": "skipped", "message": e.detail})
+    offline = [it["module_id"] for it in items if it["state"] == "waiting" and not mqtt.modules[it["module_id"]].get("online")]
     batch_id = uuid.uuid4().hex[:12]
-    wave = int(await db.get_setting("ota_wave_size") or 10) if body.name == "ota" else 50
-    asyncio.create_task(_run_waves(batch_id, jobs, body.name, max(1, wave)))
-    return {"batch_id": batch_id, "queued": len(jobs) - len(offline), "offline": offline, "skipped": skipped}
+    b = {"id": batch_id, "name": body.name, "params": body.params, "created_at": datetime.now(timezone.utc),
+         "finished": False, "cancelled": False, "items": items}
+    batches[batch_id] = b
+    for old in sorted(batches.values(), key=lambda x: x["created_at"])[:-BATCHES_KEEP]:
+        if old["finished"]:
+            batches.pop(old["id"], None)
+    wave = int(await db.get_setting("ota_wave_size") or 1) if body.name == "ota" else 50
+    asyncio.create_task(_run_waves(b, body.name, max(1, wave)))
+    return {"batch_id": batch_id, "queued": len(items) - len(skipped) - len(offline), "offline": offline, "skipped": skipped}
+
+
+@api.get("/commands/batches")
+async def list_batches(name: str | None = None):
+    out = [await _batch_with_commands(b) for b in batches.values() if not name or b["name"] == name]
+    return sorted(({k: v for k, v in b.items() if k != "items"} for b in out), key=lambda x: x["created_at"], reverse=True)
+
+
+@api.get("/commands/batches/{bid}")
+async def get_batch(bid: str):
+    b = batches.get(bid)
+    if not b:
+        raise HTTPException(404, "Пакет не знайдено (сервер міг перезапуститися)")
+    return await _batch_with_commands(b)
+
+
+@api.post("/commands/batches/{bid}/cancel")
+async def cancel_batch(bid: str):
+    b = batches.get(bid)
+    if not b:
+        raise HTTPException(404, "Пакет не знайдено")
+    b["cancelled"] = True
+    for it in b["items"]:
+        if it["state"] == "waiting" and not it.get("command_id"):
+            it.update(state="cancelled", message="Скасовано")
+    return await _batch_with_commands(b)
 
 
 # ---------------- групи ----------------
@@ -503,7 +590,7 @@ class SettingsIn(BaseModel):
     retention_1m_days: int | None = Field(None, ge=1, le=36500)
     retention_1h_days: int | None = Field(None, ge=1, le=36500)
     default_interval_s: int = Field(1, ge=1, le=3600)
-    ota_wave_size: int = Field(10, ge=1, le=200)
+    ota_wave_size: int = Field(1, ge=1, le=200)
 
 
 @api.get("/settings")

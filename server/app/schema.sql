@@ -150,7 +150,7 @@ INSERT INTO settings (key, value) VALUES
     ('retention_1m_days', '90'),
     ('retention_1h_days', 'null'),
     ('default_interval_s', '1'),
-    ('ota_wave_size', '10')
+    ('ota_wave_size', '1')
 ON CONFLICT (key) DO NOTHING;
 
 -- ---------- Етап 3: правила автоматизації, тривоги, канали сповіщень ----------
@@ -204,3 +204,13 @@ CREATE TABLE IF NOT EXISTS notify_channels (
 ALTER TABLE events ADD COLUMN IF NOT EXISTS rule_id integer;
 
 INSERT INTO settings (key, value) VALUES ('timezone', '"Europe/Kyiv"') ON CONFLICT (key) DO NOTHING;
+
+-- Оновлення прошивки по одному модулю (платам від одного блока живлення шкодить одночасний перезапуск).
+-- Разово переводимо старе типове значення 10 на 1; змінене користувачем після цього не чіпаємо.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM settings WHERE key = 'ota_wave_migrated') THEN
+        UPDATE settings SET value = '1' WHERE key = 'ota_wave_size' AND value = '10';
+        INSERT INTO settings (key, value) VALUES ('ota_wave_migrated', 'true');
+    END IF;
+END $$;

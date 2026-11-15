@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, Firmware, Group, Module } from "../api";
-import { fmtAgo, fmtValue, Level, linkState, metricLabel, metricLevel, moduleTitle } from "../format";
+import { api, Batch, Firmware, Group, Module } from "../api";
+import { CHIP_SHORT, CMD_STATUS, compareVersions, fmtAgo, fmtValue, Level, linkState, metricLabel, metricLevel, moduleTitle } from "../format";
 import { useFetch, useNow } from "../hooks";
 import { useLive } from "../live";
 import { toast, toastError } from "../toast";
@@ -18,8 +18,54 @@ export function ModulesPage() {
   const [stateFilter, setStateFilter] = useState("all");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "name", dir: 1 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [fwId, setFwId] = useState("");
+  const [fwVersion, setFwVersion] = useState("");
   const [targetGroup, setTargetGroup] = useState("");
+  const [batch, setBatch] = useState<Batch | null>(null);
+
+  // Версії прошивок (файли застосунку для OTA) і для яких чипів кожна є
+  const fwInfo = useMemo(() => {
+    const chips = new Map<string, Set<string>>();
+    const latest = new Map<string, string>();
+    for (const f of firmware.data ?? []) {
+      if (f.kind !== "app") continue;
+      if (!chips.has(f.version)) chips.set(f.version, new Set());
+      chips.get(f.version)!.add(f.chip);
+      const cur = latest.get(f.chip);
+      if (!cur || compareVersions(f.version, cur) > 0) latest.set(f.chip, f.version);
+    }
+    const versions = [...chips.keys()].sort((a, b) => compareVersions(b, a));
+    return { chips, latest, versions };
+  }, [firmware.data]);
+
+  const newerFw = (m: Module): string | null => {
+    const v = m.chip ? fwInfo.latest.get(m.chip) : undefined;
+    return v && m.fw && compareVersions(v, m.fw) > 0 ? v : null;
+  };
+
+  // Після відкриття сторінки підхоплюємо незавершене оновлення
+  useEffect(() => {
+    api<Batch[]>("/commands/batches?name=ota")
+      .then((list) => {
+        const active = list.find((b) => !b.finished);
+        if (active) return api<Batch>(`/commands/batches/${active.id}`).then(setBatch);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Поки оновлення йде, раз на 2 с читаємо стан кожного модуля
+  useEffect(() => {
+    if (!batch || batch.finished) return;
+    const t = setTimeout(() => {
+      api<Batch>(`/commands/batches/${batch.id}`).then(setBatch).catch(() => setBatch({ ...batch, finished: true }));
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [batch]);
+
+  const batchState = useMemo(() => {
+    const m = new Map<string, { state: string; message: string; progress: number | null }>();
+    batch?.items?.forEach((it) => m.set(it.module_id, it));
+    return m;
+  }, [batch]);
 
   const groupName = useMemo(() => {
     const m = new Map<number, string>();
@@ -36,6 +82,8 @@ export function ModulesPage() {
       const st = linkState(m, now).level;
       if (stateFilter === "online" && st !== "ok") return false;
       if (stateFilter === "problem" && st === "ok" && !(m.online && m.alarms?.length)) return false;
+      if (stateFilter === "outdated" && !newerFw(m)) return false;
+      if (stateFilter === "batch" && !batchState.has(m.id)) return false;
       return true;
     });
     const key = (m: Module): any => {
@@ -55,7 +103,7 @@ export function ModulesPage() {
       return (ka < kb ? -1 : ka > kb ? 1 : 0) * sort.dir;
     });
     return list;
-  }, [l.version, q, groupFilter, stateFilter, sort, now, groupName]);
+  }, [l.version, q, groupFilter, stateFilter, sort, now, groupName, fwInfo, batchState]);
 
   const selIds = [...selected].filter((id) => l.modules.has(id));
   const allSelected = rows.length > 0 && rows.every((m) => selected.has(m.id));
@@ -76,6 +124,34 @@ export function ModulesPage() {
       if (r.offline.length) msg += `, не на зв'язку: ${r.offline.length}`;
       if (r.skipped.length) msg += `, пропущено: ${r.skipped.length} (${r.skipped[0].reason})`;
       toast(msg, r.skipped.length > 0);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  async function updateSelected() {
+    const v = fwVersion;
+    const sel = selIds.map((id) => l.modules.get(id)!).filter(Boolean);
+    const same = sel.filter((m) => m.fw === v).length;
+    const noFile = sel.filter((m) => m.fw !== v && !(m.chip && fwInfo.chips.get(v)?.has(m.chip))).length;
+    const go = sel.length - same - noFile;
+    let text = `Оновити ${go} модулів до ${v}? Модулі оновлюються по черзі: наступний стартує, коли попередній перезапуститься з новою версією.`;
+    if (same) text += `\nВже на ${v}: ${same} (пропустимо).`;
+    if (noFile) text += `\nНемає файла ${v} для їхнього чипа: ${noFile} (пропустимо).`;
+    if (!go) return toast(`Немає модулів, які можна оновити до ${v}`, true);
+    if (!confirm(text)) return;
+    try {
+      const r = await api("/commands/bulk", { method: "POST", body: { module_ids: selIds, name: "ota", params: { version: v } } });
+      setBatch(await api<Batch>(`/commands/batches/${r.batch_id}`));
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  async function cancelBatch() {
+    if (!batch || !confirm("Зупинити оновлення? Модуль, що вже оновлюється, завершить оновлення, решта залишиться як є.")) return;
+    try {
+      setBatch(await api<Batch>(`/commands/batches/${batch.id}/cancel`, { method: "POST" }));
     } catch (e) {
       toastError(e);
     }
@@ -123,6 +199,8 @@ export function ModulesPage() {
           <option value="all">Будь-який стан</option>
           <option value="online">На зв'язку</option>
           <option value="problem">З проблемами</option>
+          <option value="outdated">Є нова прошивка</option>
+          {batch && <option value="batch">В останньому оновленні</option>}
         </select>
         <span className="info">Показано {rows.length} з {l.modules.size}</span>
         <span className="spacer" style={{ flex: 1 }} />
@@ -139,17 +217,16 @@ export function ModulesPage() {
         </span>
         <button disabled={!selIds.length} onClick={() => confirm(`Перезапустити ${selIds.length} модулів?`) && bulk("restart")}>Перезапустити</button>
         <span className="sep" />
-        <select value={fwId} onChange={(e) => setFwId(e.target.value)}>
-          <option value="">Прошивка…</option>
-          {firmware.data?.filter((f) => f.kind === "app").map((f) => (
-            <option key={f.id} value={f.id}>{f.chip} {f.version} ({f.filename})</option>
+        <select value={fwVersion} onChange={(e) => setFwVersion(e.target.value)} title="Файл під чип (S3 або C3) сайт підбере сам">
+          <option value="">Версія прошивки…</option>
+          {fwInfo.versions.map((v) => (
+            <option key={v} value={v}>
+              {v} ({[...fwInfo.chips.get(v)!].map((c) => CHIP_SHORT[c] ?? c).sort().join(", ")})
+            </option>
           ))}
         </select>
-        <button
-          disabled={!selIds.length || !fwId}
-          onClick={() => confirm(`Оновити прошивку на ${selIds.length} модулях? Оновлення йде хвилями.`) && bulk("ota", { firmware_id: Number(fwId) })}
-        >
-          Оновити прошивку
+        <button disabled={!selIds.length || !fwVersion || (batch !== null && !batch.finished)} onClick={updateSelected}>
+          Оновити вибрані
         </button>
         <span className="sep" />
         <select value={targetGroup} onChange={(e) => setTargetGroup(e.target.value)}>
@@ -162,6 +239,8 @@ export function ModulesPage() {
         <button disabled={!selIds.length || !targetGroup} onClick={assignGroup}>Призначити групу</button>
       </div>
 
+      {batch && <BatchPanel batch={batch} onCancel={cancelBatch} onClose={() => { setBatch(null); if (stateFilter === "batch") setStateFilter("all"); }} />}
+
       <table className="grid">
         <thead>
           <tr>
@@ -172,6 +251,7 @@ export function ModulesPage() {
             {th("group", "Група")}
             {th("chip", "Чип")}
             {th("fw", "Прошивка")}
+            {batch && <th>Оновлення</th>}
             {th("rssi", "Wi-Fi", true)}
             {th("chip_temp_c", "Темп. чипа", true)}
             {th("uptime_s", "Час роботи", true)}
@@ -195,7 +275,11 @@ export function ModulesPage() {
                 <td className="mono">{m.id}</td>
                 <td>{m.group_id ? groupName.get(m.group_id) ?? "" : <span className="muted">—</span>}</td>
                 <td>{m.chip ?? "—"}</td>
-                <td>{m.fw ?? "—"}</td>
+                <td>
+                  {m.fw ?? "—"}
+                  {newerFw(m) && <span className="badge info" title="Є новіша прошивка для цього чипа"> є {newerFw(m)}</span>}
+                </td>
+                {batch && <td><BatchCell it={batchState.get(m.id)} /></td>}
                 {cell(m, "rssi")}
                 {cell(m, "chip_temp_c")}
                 {cell(m, "uptime_s")}
@@ -207,7 +291,7 @@ export function ModulesPage() {
           })}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={13} className="muted">
+              <td colSpan={batch ? 14 : 13} className="muted">
                 {l.modules.size === 0 ? "Модулів ще немає. Натисніть «Додати модуль», щоб прошити й підключити плату через USB." : "Нічого не знайдено"}
               </td>
             </tr>
@@ -215,5 +299,52 @@ export function ModulesPage() {
         </tbody>
       </table>
     </>
+  );
+}
+
+function BatchCell({ it }: { it?: { state: string; message: string; progress: number | null } }) {
+  if (!it) return <span className="muted">—</span>;
+  const st = CMD_STATUS[it.state] ?? { text: it.state, level: "none" };
+  return (
+    <span className={st.level === "none" ? "muted" : st.level} title={it.message}>
+      {it.state === "in_progress" && it.progress !== null && (
+        <span className="progress"><div style={{ width: `${it.progress}%` }} /></span>
+      )}
+      {st.text}
+      {(it.state === "error" || it.state === "timeout" || it.state === "skipped") && it.message ? `: ${it.message}` : ""}
+    </span>
+  );
+}
+
+function BatchPanel({ batch, onCancel, onClose }: { batch: Batch; onCancel: () => void; onClose: () => void }) {
+  const c = batch.counts;
+  const n = (k: string) => c[k] ?? 0;
+  const ok = n("ok");
+  const failed = n("error") + n("timeout");
+  const running = n("sent") + n("in_progress");
+  const waiting = n("waiting");
+  const other = n("offline") + n("skipped") + n("cancelled");
+  const work = batch.total - n("skipped");
+  const done = ok + failed + n("offline") + n("cancelled");
+  return (
+    <div className="panel batch">
+      <b>Оновлення до {batch.params?.version ?? "?"}</b>
+      <span className="progress wide"><div style={{ width: `${work ? (done / work) * 100 : 100}%` }} /></span>
+      <span className="ok-text">готово {ok}</span>
+      {" з "}{work}
+      {running > 0 && <span className="warn"> · оновлюється {running}</span>}
+      {waiting > 0 && <span> · чекають {waiting}</span>}
+      {failed > 0 && <span className="alarm"> · помилки {failed}</span>}
+      {other > 0 && <span className="muted"> · пропущено {other}</span>}
+      <span style={{ flex: 1 }} />
+      {batch.finished ? (
+        <>
+          <span className="muted">Завершено{batch.cancelled ? " (зупинено)" : ""}</span>
+          <button onClick={onClose}>Закрити</button>
+        </>
+      ) : (
+        <button onClick={onCancel}>Зупинити</button>
+      )}
+    </div>
   );
 }
