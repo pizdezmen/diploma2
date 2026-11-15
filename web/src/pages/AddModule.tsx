@@ -60,6 +60,7 @@ export function AddModulePage() {
   const [progress, setProgress] = useState(0);
   const [info, setInfo] = useState<{ chip?: string; fw?: string; id?: string; image?: string }>({});
   const [error, setError] = useState("");
+  const [hint, setHint] = useState("");
   const [log, setLog] = useState<string[]>([]);
   const logRef = useRef<HTMLPreElement>(null);
 
@@ -83,6 +84,7 @@ export function AddModulePage() {
       /* */
     }
     setError("");
+    setHint("");
     setLog([]);
     setInfo({});
     setProgress(0);
@@ -119,8 +121,26 @@ export function AddModulePage() {
       setStep("config");
       link = new LineLink(port, addLog);
       link.start();
-      const hello = await link.request({ cmd: "info" }, 1000, 20000);
-      if (!hello?.ok) throw new Error("Модуль не відповідає на команду info. Можливо, на ньому стара прошивка без налаштування через USB.");
+      // Чекаємо відповіді на info до 75 с. Через 15 с просимо натиснути RST: якщо плата лишилась у завантажувачі,
+      // кнопка запускає прошивку. Після RST плата може заново підключитися до USB, тоді відкриваємо порт ще раз.
+      let hello: any = null;
+      const t0 = Date.now();
+      while (!hello && Date.now() - t0 < 75000) {
+        if (!link.alive) {
+          await link.close();
+          addLog("Порт закрився, підключаюся знову…");
+          port = await reopenPort(port, 20000);
+          link = new LineLink(port, addLog);
+          link.start();
+        }
+        hello = await link.request({ cmd: "info" }, 1000, 3000).catch(() => null);
+        if (!hello && Date.now() - t0 > 15000) setHint("Модуль не відповідає. Натисніть на платі кнопку RST (або RESET/EN) один раз і зачекайте.");
+      }
+      setHint("");
+      if (!hello?.ok)
+        throw new Error(
+          "Модуль не відповідає на команду info. Натисніть RST на платі і спробуйте ще раз з позначкою «Не прошивати, лише записати налаштування». Якщо не допоможе, на платі може бути прошивка без налаштування через USB.",
+        );
       setInfo((i) => ({ ...i, id: hello.id, chip: hello.chip, fw: hello.fw }));
       const existing = live.modules.get(hello.id);
       if (existing?.provisioned) {
@@ -173,6 +193,7 @@ export function AddModulePage() {
         setStep("idle"); // користувач закрив вікно вибору порту
         return;
       }
+      setHint("");
       setError(e?.message || String(e));
       setStep("error");
     } finally {
@@ -274,6 +295,7 @@ export function AddModulePage() {
       {step === "done" && info.id && (
         <p className="ok-text">Модуль на зв'язку. <Link to={`/modules/${info.id}`}>Відкрити модуль</Link>. Можна підключати наступну плату.</p>
       )}
+      {hint && <div className="panel" style={{ borderColor: "var(--warn)", color: "var(--warn)", marginTop: 8 }}>{hint}</div>}
       {error && <div className="err">{error}</div>}
       {log.length > 0 && (
         <>

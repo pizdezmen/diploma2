@@ -45,9 +45,18 @@ export async function flashImage(loader: ESPLoader, data: Uint8Array, eraseAll: 
   });
 }
 
-export async function resetAndClose(loader: ESPLoader, transport: Transport) {
+/**
+ * Перезапуск у прошивку після запису. HardReset з esptool-js 0.7.1 лише ставить RTS=0, а після підключення
+ * RTS уже 0, тож плата лишалася в завантажувачі. Робимо імпульс самі, як esptool.py для USB Serial/JTAG:
+ * DTR=0 (не входити в завантажувач), RTS=1 (скидання), пауза, RTS=0.
+ */
+export async function resetAndClose(_loader: ESPLoader, transport: Transport) {
   try {
-    await loader.after("hard_reset");
+    await transport.setDTR(false);
+    await transport.setRTS(true);
+    await sleep(200);
+    await transport.setRTS(false);
+    await sleep(200);
   } finally {
     await transport.disconnect().catch(() => {});
   }
@@ -165,6 +174,11 @@ export class LineLink {
       if (r) return r;
     }
     return null;
+  }
+
+  /** Порт ще живий (плата не відключилася від USB). */
+  get alive() {
+    return !this.closed && !!this.port.readable;
   }
 
   async close() {
