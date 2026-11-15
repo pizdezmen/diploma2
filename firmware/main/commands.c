@@ -32,8 +32,10 @@ static void cmd_led(const char *id, const cJSON *params)
     if (mode && strcmp(mode, "on") == 0) m = LED_ON;
     else if (mode && strcmp(mode, "off") == 0) m = LED_OFF;
     else if (mode && strcmp(mode, "blink") == 0) m = LED_BLINK;
+    else if (mode && strcmp(mode, "breathe") == 0) m = LED_BREATHE;
+    else if (mode && strcmp(mode, "rainbow") == 0) m = LED_RAINBOW;
     else {
-        commands_ack(id, "error", -1, "mode must be on|off|blink");
+        commands_ack(id, "error", -1, "mode must be on|off|blink|breathe|rainbow");
         return;
     }
     status_led_set(m);

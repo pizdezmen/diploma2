@@ -2,7 +2,8 @@ menu "Модуль моніторингу (dm)"
 
     choice DM_LED_TYPE
         prompt "Тип вбудованого світлодіода"
-        default DM_LED_TYPE_STRIP if IDF_TARGET_ESP32S3
+        # На платах користувача і S3, і C3 мають адресний RGB (C3: GPIO8, як у ESP32-C3-DevKitM-1)
+        default DM_LED_TYPE_STRIP if IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32C3
         default DM_LED_TYPE_GPIO
 
         config DM_LED_TYPE_STRIP

@@ -74,11 +74,6 @@ export function ModulePage() {
         <span className="note">{st.text}</span>
       </h1>
       <div className="toolbar">
-        <span className="seg">
-          <button className={m.led === "on" ? "on" : ""} disabled={!m.online} onClick={() => cmd("led", { mode: "on" })}>Світлодіод увімк.</button>
-          <button className={m.led === "blink" ? "on" : ""} disabled={!m.online} onClick={() => cmd("led", { mode: "blink" })}>Блимати</button>
-          <button className={m.led === "off" ? "on" : ""} disabled={!m.online} onClick={() => cmd("led", { mode: "off" })}>Вимк.</button>
-        </span>
         <button disabled={!m.online} onClick={() => confirm("Перезапустити модуль?") && cmd("restart")}>Перезапустити</button>
         <span className="sep" />
         <OtaControl list={fwList} disabled={!m.online} current={m.fw} onRun={(fid) => cmd("ota", { firmware_id: fid })} />
@@ -97,7 +92,7 @@ export function ModulePage() {
 
       <OnModule m={m} interval={detail.data?.effective_interval_s ?? 1} />
 
-      <Addons m={m} metrics={detail.data?.metrics ?? []} />
+      <Addons m={m} metrics={detail.data?.metrics ?? []} onCommand={cmd} />
 
       <h2>Команди</h2>
       <table className="grid">

@@ -103,7 +103,7 @@ export const CMD_STATUS: Record<string, { text: string; level: Level }> = {
 };
 
 export function cmdParams(c: { name: string; params: any }) {
-  if (c.name === "led") return { on: "увімк.", off: "вимк.", blink: "блимати" }[c.params?.mode as string] ?? "";
+  if (c.name === "led") return { on: "увімк.", off: "вимк.", blink: "блимати", breathe: "дихання", rainbow: "веселка" }[c.params?.mode as string] ?? "";
   if (c.name === "ota") return c.params?.version ? `версія ${c.params.version}` : "";
   return "";
 }

@@ -118,8 +118,26 @@ class DisplayAddon(BaseModel):
         return out
 
 
-Addon = Annotated[Union[DisplayAddon], Field(discriminator="type")]
-ADDON_TYPES = {"display": DisplayAddon}
+class LedAddon(BaseModel):
+    """Вбудований світлодіод. Його не додають і не прибирають, із сайту лише змінюють підключення,
+    якщо прошивка вгадала не те для конкретної плати. Керування — команда led."""
+    type: Literal["led"]
+    id: Literal["led"] = "led"
+    title: str = Field("", max_length=40)
+    driver: Literal["gpio", "ws2812"]
+    gpio: int = Field(ge=0, le=48)
+    active_low: bool = False
+    color: str = Field("#00ff00", pattern=r"^#[0-9a-fA-F]{6}$")  # для «увімк.», блимання, дихання
+    brightness: int = Field(20, ge=1, le=100)
+    period_ms: int = Field(500, ge=100, le=10000)  # період блимання, дихання, веселки
+    show_status: bool = False  # коли вимкнено вручну: зелений / жовтий (немає зв'язку) / червоний (поза нормою)
+
+    def wire(self) -> dict:
+        return self.model_dump(exclude={"title"})
+
+
+Addon = Annotated[Union[DisplayAddon, LedAddon], Field(discriminator="type")]
+ADDON_TYPES = {"display": DisplayAddon, "led": LedAddon}
 ADDONS_MAX = 4
 CONFIG_MAX_BYTES = 3800  # модуль зберігає конфігурацію в NVS (до 4000 байт) і приймає до 4 КБ
 
@@ -128,9 +146,14 @@ def check_addons(addons: list) -> None:
     ids = [a.id for a in addons]
     if len(ids) != len(set(ids)):
         raise ValueError("ідентифікатори доповнень мають бути різними")
-    if len(addons) > ADDONS_MAX:
+    if len([a for a in addons if a.type != "led"]) > ADDONS_MAX:
         raise ValueError(f"не більше {ADDONS_MAX} доповнень на модуль")
+    leds = [a for a in addons if a.type == "led"]
     displays = [a for a in addons if a.type == "display"]
+    for led in leds:
+        for d in displays:
+            if led.gpio in (d.sda, d.scl, d.button):
+                raise ValueError(f"GPIO{led.gpio} світлодіода зайнятий екраном {d.title or d.id}")
     for i, a in enumerate(displays):
         for b in displays[i + 1:]:
             if {a.sda, a.scl} == {b.sda, b.scl} and a.addr == b.addr:

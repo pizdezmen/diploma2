@@ -271,8 +271,8 @@ class CommandIn(BaseModel):
 async def _prepare(mid: str, name: str, params: dict) -> dict:
     """Перевіряє команду й повертає параметри для модуля."""
     if name == "led":
-        if params.get("mode") not in ("on", "off", "blink"):
-            raise HTTPException(400, "led: mode має бути on, off або blink")
+        if params.get("mode") not in ("on", "off", "blink", "breathe", "rainbow"):
+            raise HTTPException(400, "led: mode має бути on, off, blink, breathe або rainbow")
         return {"mode": params["mode"]}
     if name == "restart":
         return {}

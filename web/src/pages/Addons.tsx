@@ -1,6 +1,6 @@
 // Доповнення модуля (docs/PROTOCOL.md 3.7): вбудовані (світлодіод) і підключені (екрани).
 import { useEffect, useState } from "react";
-import { api, Addon, AddonState, DisplayAddon, DisplayItem, Module } from "../api";
+import { api, Addon, AddonState, DisplayAddon, DisplayItem, LedAddon, Module } from "../api";
 import { metricLabel } from "../format";
 import { toast, toastError } from "../toast";
 
@@ -30,7 +30,7 @@ function defaultPins(chip: string | null) {
 
 const itemName = (src: string) => SERVICE[src] ?? metricLabel(src);
 
-function newDisplay(m: Module, existing: Addon[]): DisplayAddon {
+function newDisplay(m: Module, existing: DisplayAddon[]): DisplayAddon {
   let n = 1;
   while (existing.some((a) => a.id === `oled${n}`)) n++;
   return {
@@ -48,19 +48,28 @@ function stateCell(m: Module, st: AddonState | undefined, applied: boolean) {
   return st.ok ? <td className="ok">працює</td> : <td className="warn wrap">{st.error || "не працює"}</td>;
 }
 
-export function Addons({ m, metrics }: { m: Module; metrics: string[] }) {
-  const addons = m.addons ?? [];
+const LED_STATE: Record<string, string> = { on: "світиться", blink: "блимає", breathe: "дихає", rainbow: "веселка", off: "вимкнено" };
+const LED_MODES: [string, string][] = [["on", "Увімкнути"], ["blink", "Блимати"], ["breathe", "Дихання"], ["rainbow", "Веселка"], ["off", "Вимкнути"]];
+
+export function Addons({ m, metrics, onCommand }: { m: Module; metrics: string[]; onCommand: (name: string, params?: any) => void }) {
+  const all = m.addons ?? [];
+  const ledCfg = all.find((a): a is LedAddon => a.type === "led");
+  const displays = all.filter((a): a is DisplayAddon => a.type === "display");
   const states = m.addon_state ?? [];
   const [edit, setEdit] = useState<{ index: number; draft: DisplayAddon } | null>(null);
+  const [ledEdit, setLedEdit] = useState(false);
   const [busy, setBusy] = useState(false);
   const supported = m.caps?.includes("display");
   const applied = m.applied_config_rev === m.config_rev;
 
-  useEffect(() => setEdit(null), [m.id]);
+  useEffect(() => {
+    setEdit(null);
+    setLedEdit(false);
+  }, [m.id]);
 
-  // Вбудовані доповнення повідомляє модуль; стара прошивка не повідомляє, тоді світлодіод видно з caps
-  const builtin: AddonState[] = states.filter((s) => s.builtin);
-  if (!builtin.length && m.caps?.includes("led")) builtin.push({ id: "led", type: "led", ok: true, builtin: true, error: "" });
+  // Світлодіод повідомляє модуль (з 0.4.0); стара прошивка не повідомляє, тоді його видно з caps
+  const ledState = states.find((s) => s.builtin && s.type === "led");
+  const hasLed = !!ledState || m.caps?.includes("led");
 
   async function saveAll(list: Addon[], msg: string) {
     setBusy(true);
@@ -68,21 +77,23 @@ export function Addons({ m, metrics }: { m: Module; metrics: string[] }) {
       await api(`/modules/${m.id}`, { method: "PATCH", body: { addons: list } });
       toast(msg);
       setEdit(null);
+      setLedEdit(false);
     } catch (e) {
       toastError(e);
     } finally {
       setBusy(false);
     }
   }
+  const withLed = (list: DisplayAddon[], led: LedAddon | undefined = ledCfg): Addon[] => (led ? [led, ...list] : list);
 
   function remove(i: number) {
-    const a = addons[i];
+    const a = displays[i];
     if (!confirm(`Прибрати «${a.title || a.id}» з модуля?`)) return;
-    saveAll(addons.filter((_, k) => k !== i), "Прибрано");
+    saveAll(withLed(displays.filter((_, k) => k !== i)), "Прибрано");
   }
 
   function toggle(i: number) {
-    saveAll(addons.map((a, k) => (k === i ? { ...a, enabled: !a.enabled } : a)), "Збережено");
+    saveAll(withLed(displays.map((a, k) => (k === i ? { ...a, enabled: !a.enabled } : a))), "Збережено");
   }
 
   return (
@@ -90,8 +101,8 @@ export function Addons({ m, metrics }: { m: Module; metrics: string[] }) {
       <h2>Доповнення</h2>
       {!supported && m.fw && (
         <div className="panel warn-panel">
-          <span className="badge warn">Увага</span> Прошивка модуля {m.fw} не вміє екрани. Налаштування збережуться, але діятимуть
-          після оновлення прошивки до 0.4.0 або новішої.
+          <span className="badge warn">Увага</span> Прошивка модуля {m.fw} не вміє екрани і налаштування світлодіода. Налаштування
+          збережуться, але діятимуть після оновлення прошивки до 0.4.0 або новішої.
         </div>
       )}
       <table className="grid">
@@ -99,17 +110,27 @@ export function Addons({ m, metrics }: { m: Module; metrics: string[] }) {
           <tr><th>Назва</th><th>Тип</th><th>Підключення</th><th>Що показує</th><th>Стан</th><th></th></tr>
         </thead>
         <tbody>
-          {builtin.map((b) => (
-            <tr key={"b-" + b.id}>
+          {hasLed && (
+            <tr className={ledEdit ? "selected" : ""}>
               <td>Вбудований світлодіод</td>
-              <td>{TYPE_LABELS[b.type] ?? b.type}</td>
-              <td>на платі{b.hw ? `, ${b.hw}` : ""}</td>
-              <td className="muted">керування кнопками вгорі сторінки і з правил</td>
-              <td className={m.online ? "ok" : "muted"}>{m.online ? (m.led === "on" ? "увімкнено" : m.led === "blink" ? "блимає" : "вимкнено") : "немає зв'язку з модулем"}</td>
-              <td></td>
+              <td>{TYPE_LABELS.led}</td>
+              <td>на платі{ledState?.hw ? `, ${ledState.hw}` : ""}{ledCfg && !applied ? <span className="muted"> (змінюється)</span> : null}</td>
+              <td>
+                <span className="seg">
+                  {LED_MODES.filter(([k]) => (k !== "breathe" && k !== "rainbow") || m.caps?.includes("display")).map(([k, t]) => (
+                    <button key={k} className={m.led === k ? "on" : ""} disabled={!m.online} onClick={() => onCommand("led", { mode: k })}>{t}</button>
+                  ))}
+                </span>
+              </td>
+              {!m.online ? <td className="muted">немає зв'язку з модулем</td>
+                : ledState && !ledState.ok ? <td className="warn wrap">{ledState.error || "не працює"}</td>
+                : <td className="ok">{LED_STATE[m.led ?? "off"] ?? m.led}{m.led === "off" && ledCfg?.show_status ? ", показує стан" : ""}</td>}
+              <td style={{ whiteSpace: "nowrap" }}>
+                <button disabled={busy || !!edit} onClick={() => setLedEdit(true)}>Налаштувати</button>
+              </td>
             </tr>
-          ))}
-          {addons.map((a, i) => (
+          )}
+          {displays.map((a, i) => (
             <tr key={a.id} className={edit?.index === i ? "selected" : ""}>
               <td>{a.title || a.id} {!a.enabled && <span className="badge">вимкнено</span>}</td>
               <td>{TYPE_LABELS[a.type] ?? a.type} <span className="muted">{a.driver.toUpperCase()} {a.height === 32 ? "128×32" : "128×64"}</span></td>
@@ -117,7 +138,7 @@ export function Addons({ m, metrics }: { m: Module; metrics: string[] }) {
               <td className="wrap">{VIEW_LABELS[a.view]}: {a.items.map((x) => x.label || itemName(x.src)).join(", ") || "нічого"}</td>
               {stateCell(m, states.find((s) => s.id === a.id && !s.builtin), applied)}
               <td style={{ whiteSpace: "nowrap" }}>
-                <button disabled={busy} onClick={() => setEdit({ index: i, draft: structuredClone(a) })}>Змінити</button>{" "}
+                <button disabled={busy || ledEdit} onClick={() => setEdit({ index: i, draft: structuredClone(a) })}>Змінити</button>{" "}
                 <button disabled={busy} onClick={() => toggle(i)}>{a.enabled ? "Вимкнути" : "Увімкнути"}</button>{" "}
                 <button className="danger" disabled={busy} onClick={() => remove(i)}>Прибрати</button>
               </td>
@@ -126,9 +147,19 @@ export function Addons({ m, metrics }: { m: Module; metrics: string[] }) {
         </tbody>
       </table>
       <div className="toolbar" style={{ marginTop: 6 }}>
-        <button disabled={busy || addons.length >= 4 || !!edit} onClick={() => setEdit({ index: -1, draft: newDisplay(m, addons) })}>Додати екран</button>
-        <span className="note">Екран OLED 0,96″ 128×64 на I2C (SSD1306, SSD1315, SH1106). До 4 доповнень на модуль.</span>
+        <button disabled={busy || displays.length >= 4 || !!edit || ledEdit} onClick={() => setEdit({ index: -1, draft: newDisplay(m, displays) })}>Додати екран</button>
+        <span className="note">Екран OLED 0,96″ 128×64 на I2C (SSD1306, SSD1315, SH1106). До 4 екранів на модуль. Світлодіодом керують і правила.</span>
       </div>
+      {ledEdit && (
+        <LedEditor
+          m={m}
+          cfg={ledCfg}
+          state={ledState}
+          busy={busy}
+          onCancel={() => setLedEdit(false)}
+          onSave={(led) => saveAll(withLed(displays, led ?? undefined), "Збережено, модуль отримає налаштування")}
+        />
+      )}
       {edit && (
         <DisplayEditor
           key={edit.index}
@@ -139,12 +170,92 @@ export function Addons({ m, metrics }: { m: Module; metrics: string[] }) {
           busy={busy}
           onCancel={() => setEdit(null)}
           onSave={(d) => {
-            const list = edit.index < 0 ? [...addons, d] : addons.map((a, k) => (k === edit.index ? d : a));
-            saveAll(list, "Збережено, модуль отримає налаштування");
+            const list = edit.index < 0 ? [...displays, d] : displays.map((a, k) => (k === edit.index ? d : a));
+            saveAll(withLed(list), "Збережено, модуль отримає налаштування");
           }}
         />
       )}
     </>
+  );
+}
+
+// Підключення вбудованого світлодіода; «За замовчуванням» прибирає налаштування, і прошивка бере своє
+function LedEditor({ m, cfg, state, busy, onCancel, onSave }: {
+  m: Module; cfg: LedAddon | undefined; state: AddonState | undefined; busy: boolean;
+  onCancel: () => void; onSave: (led: LedAddon | null) => void;
+}) {
+  const def = { driver: "ws2812" as const, gpio: m.chip === "esp32c3" ? 8 : 48, active_low: false };
+  const hw = cfg ?? (state?.driver ? { driver: state.driver, gpio: state.gpio ?? def.gpio, active_low: !!state.active_low } : def);
+  const [driver, setDriver] = useState<LedAddon["driver"]>(hw.driver);
+  const [gpio, setGpio] = useState(String(hw.gpio));
+  const [low, setLow] = useState(hw.active_low);
+  const [color, setColor] = useState(cfg?.color ?? "#00ff00");
+  const [brightness, setBrightness] = useState(cfg?.brightness ?? 20);
+  const [period, setPeriod] = useState(String(cfg?.period_ms ?? 500));
+  const [status, setStatus] = useState(cfg?.show_status ?? false);
+  const rgb = driver === "ws2812";
+  return (
+    <div className="panel" style={{ marginTop: 8 }}>
+      <div className="chart-title">Вбудований світлодіод</div>
+      <div className="layout-2">
+        <div>
+          {rgb && (
+            <div className="form-row">
+              <label>Колір</label>
+              <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
+              <span className="mono">{color}</span>
+              <span className="note">для «Увімкнути», «Блимати» і «Дихання»</span>
+            </div>
+          )}
+          <div className="form-row">
+            <label>Яскравість, %</label>
+            <input type="range" min={1} max={100} value={brightness} onChange={(e) => setBrightness(Number(e.target.value))} style={{ flex: 1 }} disabled={!rgb} />
+            <span style={{ width: 40 }}>{rgb ? brightness : "—"}</span>
+          </div>
+          <div className="form-row">
+            <label>Швидкість ефектів, мс</label>
+            <input type="number" min={100} max={10000} step={100} value={period} onChange={(e) => setPeriod(e.target.value)} style={{ width: 90 }} />
+            <span className="note">повний цикл блимання, дихання чи веселки</span>
+          </div>
+          <div className="form-row">
+            <label>Показувати стан</label>
+            <label style={{ width: "auto" }}><input type="checkbox" checked={status} onChange={(e) => setStatus(e.target.checked)} /> коли світлодіод вимкнено</label>
+          </div>
+          <div className="note" style={{ margin: "-2px 0 6px 158px" }}>
+            Зелений — усе гаразд, жовтий — немає Wi-Fi чи сервера, червоний — показник поза нормою. «Увімкнути», «Блимати» та інші режими
+            з кнопок чи правил мають перевагу; «Вимкнути» повертає показ стану.
+          </div>
+        </div>
+        <div>
+          <div className="form-row">
+            <label>Тип</label>
+            <select value={driver} onChange={(e) => setDriver(e.target.value as LedAddon["driver"])}>
+              <option value="ws2812">кольоровий RGB (WS2812)</option>
+              <option value="gpio">звичайний одноколірний</option>
+            </select>
+          </div>
+          <div className="form-row">
+            <label>Вивід GPIO</label>
+            <input type="number" min={0} max={48} value={gpio} onChange={(e) => setGpio(e.target.value)} style={{ width: 70 }} />
+            {!rgb && (
+              <label style={{ width: "auto" }}><input type="checkbox" checked={low} onChange={(e) => setLow(e.target.checked)} /> інверсний</label>
+            )}
+          </div>
+          <div className="note">
+            Зазвичай: ESP32-S3 — RGB на GPIO48 (на деяких платах GPIO38), ESP32-C3 — RGB на GPIO8. Одноколірний світлодіод уміє лише
+            світитися й блимати.
+          </div>
+        </div>
+      </div>
+      <div className="toolbar" style={{ marginTop: 8 }}>
+        <button className="primary" disabled={busy || gpio === "" || period === ""} onClick={() => onSave({
+          type: "led", id: "led", title: "", driver, gpio: Number(gpio), active_low: !rgb && low,
+          color, brightness, period_ms: Number(period), show_status: status,
+        })}>Зберегти</button>
+        <button disabled={busy || !cfg} onClick={() => onSave(null)} title="Прибрати налаштування з сайту: прошивка візьме все за замовчуванням">За замовчуванням</button>
+        <button disabled={busy} onClick={onCancel}>Скасувати</button>
+      </div>
+    </div>
   );
 }
 
