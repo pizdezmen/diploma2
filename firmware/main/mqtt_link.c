@@ -11,6 +11,7 @@
 #include "esp_idf_version.h"
 #include "cJSON.h"
 #include "dm.h"
+#include "addons.h"
 
 static const char *TAG = "mqtt";
 
@@ -62,7 +63,10 @@ void mqtt_link_publish_status(void)
     cJSON_AddNumberToObject(j, "config_rev", telemetry_config_rev());
     cJSON_AddStringToObject(j, "led", status_led_mode_str());
     const char *caps[] = { "led", "restart", "ota", "filters", "limits", "hybrid" };
-    cJSON_AddItemToObject(j, "caps", cJSON_CreateStringArray(caps, sizeof(caps) / sizeof(caps[0])));
+    cJSON *ca = cJSON_CreateStringArray(caps, sizeof(caps) / sizeof(caps[0]));
+    addons_add_caps(ca);
+    cJSON_AddItemToObject(j, "caps", ca);
+    addons_add_status(j);
     char *s = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     mqtt_link_publish("status", s, 1, true);
@@ -177,7 +181,7 @@ static void client_start(void)
         },
         // Випадкова затримка перепідключення, щоб модулі не ломилися одночасно.
         .network.reconnect_timeout_ms = 5000 + esp_random() % 5000,
-        .buffer.size = 2048,
+        .buffer.size = 4096, // вхідна конфігурація з доповненнями (PROTOCOL.md 3.7, до ~3,8 КБ)
         .buffer.out_size = 12288, // телеметрія з передісторією тривоги (telemetry.c, MSG_MAX_LEN)
     };
     esp_mqtt_client_handle_t c = esp_mqtt_client_init(&cfg);

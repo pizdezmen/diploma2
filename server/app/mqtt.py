@@ -297,6 +297,14 @@ class MqttService:
                     fields[k] = data[k]
             if isinstance(data.get("caps"), list):
                 fields["caps"] = [c for c in data["caps"] if isinstance(c, str)]
+            if isinstance(data.get("addons"), list):
+                fields["addon_state"] = [
+                    {"id": str(a.get("id", ""))[:16], "type": str(a.get("type", ""))[:16], "ok": a.get("ok") is True,
+                     "builtin": a.get("builtin") is True, "hw": str(a.get("hw") or "")[:40],
+                     "error": str(a.get("error") or "")[:120]}
+                    for a in data["addons"][:8] if isinstance(a, dict)]
+            elif "caps" in fields and "addons" not in fields["caps"]:
+                fields["addon_state"] = []
             if isinstance(data.get("config_rev"), int):
                 fields["applied_config_rev"] = data["config_rev"]
             fields["last_seen_at"] = now
@@ -471,7 +479,7 @@ class MqttService:
 
 def public_module(m: dict) -> dict:
     keys = ("id", "name", "note", "group_id", "chip", "fw", "idf", "ip", "ssid", "reset_reason", "led", "caps",
-            "online", "interval_s", "hybrid", "filters", "limits", "alarms", "config_rev", "applied_config_rev", "provisioned", "provision_denied_at",
+            "online", "interval_s", "hybrid", "filters", "limits", "alarms", "addons", "addon_state", "config_rev", "applied_config_rev", "provisioned", "provision_denied_at",
             "last_values", "last_seen_at", "last_status_at", "created_at")
     return {k: m.get(k) for k in keys}
 

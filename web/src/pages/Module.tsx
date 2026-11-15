@@ -9,6 +9,7 @@ import {
 import { useFetch, useNow } from "../hooks";
 import { live, useLive } from "../live";
 import { toast, toastError } from "../toast";
+import { Addons } from "./Addons";
 import { OnModule } from "./OnModule";
 
 const RANGES = [
@@ -95,6 +96,8 @@ export function ModulePage() {
       </div>
 
       <OnModule m={m} interval={detail.data?.effective_interval_s ?? 1} />
+
+      <Addons m={m} metrics={detail.data?.metrics ?? []} />
 
       <h2>Команди</h2>
       <table className="grid">

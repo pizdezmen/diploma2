@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "dm.h"
+#include "addons.h"
 
 static const char *TAG = "telemetry";
 
@@ -73,6 +74,21 @@ static bool     s_pending;        // треба надіслати при пер
 static bool     s_pending_history;
 
 uint32_t telemetry_config_rev(void) { return s_config_rev; }
+
+bool telemetry_value(const char *name, float *v, int *decimals)
+{
+    int i = -1;
+    for (int k = 0; k < (int)N_METRICS; k++) {
+        if (strcmp(METRICS[k].name, name) == 0) i = k;
+    }
+    if (i < 0 || !s_lock) return false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool ok = s_n > 0;
+    if (ok) *v = s_hist[(s_n - 1) % HISTORY_MAX].v[i];
+    xSemaphoreGive(s_lock);
+    if (decimals) *decimals = METRICS[i].decimals;
+    return ok && !isnan(*v);
+}
 
 static int64_t now_ms(void)
 {
@@ -309,6 +325,7 @@ void telemetry_start(void)
         s_cfg.interval_s = interval;
         s_config_rev = rev;
     }
+    if (json) addons_apply_config(json, strlen(json));
     free(json);
     ESP_LOGI(TAG, "конфігурація з NVS: rev %lu, інтервал %lu с, гібридний %s",
              (unsigned long)s_cfg.rev, (unsigned long)s_cfg.interval_s, s_cfg.hybrid ? "так" : "ні");
@@ -340,5 +357,6 @@ void telemetry_apply_config(const char *data, int len)
              (unsigned long)c.rev, (unsigned long)c.interval_s, c.hybrid ? "так" : "ні",
              (unsigned long)c.normal_s, (unsigned long)c.history_s);
     xTaskNotifyGive(s_task);
+    addons_apply_config(data, len); // поза s_lock: задача доповнень сама читає показники під ним
     mqtt_link_publish_status();
 }

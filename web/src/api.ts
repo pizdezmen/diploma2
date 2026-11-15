@@ -53,6 +53,8 @@ export interface Module {
   filters: Record<string, Filter>;
   limits: Record<string, Limit>;
   alarms: string[];
+  addons: Addon[];
+  addon_state: AddonState[];
   config_rev: number;
   applied_config_rev: number;
   provisioned: boolean;
@@ -79,6 +81,41 @@ export interface Limit {
   min: number | null;
   max: number | null;
   hyst: number;
+}
+
+// Доповнення модуля (docs/PROTOCOL.md 3.7). Поки є один тип: екран.
+export interface DisplayItem {
+  src: string; // назва показника або службовий пункт "@name", "@link" ...
+  label: string;
+  unit: string;
+}
+export interface DisplayAddon {
+  type: "display";
+  id: string;
+  title: string;
+  enabled: boolean;
+  driver: "ssd1306" | "ssd1315" | "sh1106";
+  sda: number;
+  scl: number;
+  addr: number;
+  height: 64 | 32;
+  flip: boolean;
+  button: number;
+  brightness: number;
+  off_after_s: number;
+  view: "big" | "list" | "cycle";
+  cycle_s: number;
+  items: DisplayItem[];
+}
+export type Addon = DisplayAddon;
+// Стан, який повідомляє модуль; builtin — вбудоване в плату (світлодіод), його не налаштовують із сайту
+export interface AddonState {
+  id: string;
+  type: string;
+  ok: boolean;
+  builtin?: boolean;
+  hw?: string;
+  error: string;
 }
 
 export interface Group {

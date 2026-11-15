@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import auth, db
-from .modcfg import Filter, Hybrid, Limit, validate_metrics
+from .modcfg import CONFIG_MAX_BYTES, Addon, Filter, Hybrid, Limit, check_addons, config_extra, config_size, validate_metrics
 from .config import settings
 from .firmware import FirmwareError, parse_image
 from .hub import hub
@@ -129,9 +129,11 @@ class ModulePatch(BaseModel):
     hybrid: Hybrid | None = None
     filters: dict[str, Filter] | None = None
     limits: dict[str, Limit] | None = None
+    # Доповнення (docs/PROTOCOL.md 3.7): увесь список одразу
+    addons: list[Addon] | None = None
 
 
-MODULE_CONFIG_FIELDS = {"interval_s", "group_id", "hybrid", "filters", "limits"}
+MODULE_CONFIG_FIELDS = {"interval_s", "group_id", "hybrid", "filters", "limits", "addons"}
 
 
 @api.patch("/modules/{mid}")
@@ -154,13 +156,24 @@ async def patch_module(mid: str, body: ModulePatch):
             fields[k] = {name: v.model_dump() for name, v in d.items()}
     if "hybrid" in fields and fields["hybrid"] is not None:
         fields["hybrid"] = fields["hybrid"].model_dump()
+    if "addons" in fields:
+        addons = fields["addons"] or []
+        try:
+            check_addons(addons)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        fields["addons"] = [a.model_dump() for a in addons]
+    # Конфігурація має влізти в пам'ять модуля
+    if (size := config_size({"rev": 1, "interval_s": 1, **config_extra({**m, **fields})})) > CONFIG_MAX_BYTES:
+        raise HTTPException(400, f"Забагато налаштувань для модуля: {size} байт із {CONFIG_MAX_BYTES}. Приберіть частину пунктів екранів чи меж.")
     sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
     try:
         row = await db.p().fetchrow(f"UPDATE modules SET {sets} WHERE id = $1 RETURNING *", mid, *fields.values())
     except Exception as e:
         raise HTTPException(400, str(e))
     m.update(dict(row))
-    if MODULE_CONFIG_FIELDS & fields.keys():
+    # Назва модуля потрапляє на екран, якщо там вибрано пункт «Назва модуля»
+    if MODULE_CONFIG_FIELDS & fields.keys() or ("name" in fields and "name" in config_extra(m)):
         await mqtt.push_config(mid)
     hub.broadcast({"type": "module", "data": public_module(m)})
     return public_module(m)
