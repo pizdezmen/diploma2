@@ -13,6 +13,7 @@ idf_component_register(
         "netcfg.c"
         "serial_cfg.c"
         "signal.c"
+        "power_guard.c"
         "addons/addons.c"
         "addons/i2c_bus.c"
         "addons/display/addon_display.c"
@@ -25,6 +26,7 @@ idf_component_register(
         esp_https_ota app_update mqtt json mbedtls esp_driver_tsens
         esp_driver_gpio esp_app_format spi_flash esp_psram
         esp_driver_usb_serial_jtag esp_driver_i2c
+        bootloader_support esp_hw_support hal
 )
 
 # Збірка для сайту: без значень із secrets.h (idf.py ... -D DM_NO_SECRETS=1)

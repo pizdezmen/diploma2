@@ -18,3 +18,10 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 # Консоль і налаштування з сайту через нативний USB (USB Serial/JTAG)
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Живлення: детектор просадки перезапускає плату вже на ~2,9 В (типово ~2,5 В, коли
+# flash може працювати ненадійно і плата зависає). На ESP32-S3 рівень 4 = 2,84 В, на C3 = 2,92 В.
+CONFIG_ESP_BROWNOUT_DET=y
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_4=y
+# Сторож задач перезапускає плату з самого старту (далі addons.c задає 8 с)
+CONFIG_ESP_TASK_WDT_PANIC=y
