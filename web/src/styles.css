@@ -116,3 +116,13 @@ table.kv th { position: static; width: 190px; }
 .toast.err { border-color: var(--alarm); }
 pre.log { background: var(--panel); border: 1px solid var(--border); padding: 8px; max-height: 260px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
 .ok-text { color: var(--ok); }
+
+/* Етап 3: лічильник тривог у меню, рядки тривог */
+.topbar nav .count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 5px; border-radius: 9px; font-size: 11px; line-height: 16px; text-align: center; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+.topbar nav .count.warn { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+.topbar nav .count.alarm { background: var(--alarm-bg); border-color: var(--alarm); color: var(--alarm); }
+table.grid tr.alarm td { background: var(--alarm-bg); }
+table.grid tr.warn td { background: var(--warn-bg); }
+table.grid tr.ack td { opacity: .75; }
+.checks { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.checks label { width: auto; color: var(--text); }

@@ -144,3 +144,55 @@ INSERT INTO settings (key, value) VALUES
     ('default_interval_s', '1'),
     ('ota_wave_size', '10')
 ON CONFLICT (key) DO NOTHING;
+
+-- ---------- Етап 3: правила автоматизації, тривоги, канали сповіщень ----------
+-- Правило: де діє (scope), коли спрацьовує (trigger), що робити (actions) і що робити після повернення в норму.
+CREATE TABLE IF NOT EXISTS rules (
+    id                serial PRIMARY KEY,
+    name              text NOT NULL,
+    enabled           boolean NOT NULL DEFAULT true,
+    scope             jsonb NOT NULL DEFAULT '{"type": "all"}',   -- all | group {group_id} | modules {ids}
+    trigger           jsonb NOT NULL,                             -- див. server/app/rules.py
+    actions           jsonb NOT NULL DEFAULT '[]',
+    recovery_actions  jsonb NOT NULL DEFAULT '[]',
+    level             text NOT NULL DEFAULT 'warning',             -- info, warning, alarm
+    notify            boolean NOT NULL DEFAULT true,                -- показувати тривогу й надсилати в канали
+    message           text NOT NULL DEFAULT '',                     -- власний текст; порожньо = складається сам
+    cooldown_s        integer NOT NULL DEFAULT 60 CHECK (cooldown_s BETWEEN 0 AND 86400),
+    note              text NOT NULL DEFAULT '',
+    last_fired_at     timestamptz,
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+
+-- Тривога: стан «правило спрацювало на модулі» від початку до повернення в норму.
+CREATE TABLE IF NOT EXISTS alerts (
+    id               bigserial PRIMARY KEY,
+    rule_id          integer REFERENCES rules(id) ON DELETE SET NULL,
+    source           text NOT NULL DEFAULT 'rule',   -- rule або зовнішнє джерело (наприклад, тривога від модуля)
+    key              text NOT NULL DEFAULT '',
+    module_id        text,
+    level            text NOT NULL,
+    message          text NOT NULL,
+    value            double precision,
+    started_at       timestamptz NOT NULL DEFAULT now(),
+    ended_at         timestamptz,
+    acknowledged_at  timestamptz
+);
+CREATE INDEX IF NOT EXISTS alerts_active_idx ON alerts (started_at DESC) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS alerts_time_idx ON alerts (started_at DESC);
+
+-- Канали сповіщень (інтерфейс працює завжди; тут додаткові: Telegram, вебхук).
+CREATE TABLE IF NOT EXISTS notify_channels (
+    id          serial PRIMARY KEY,
+    name        text NOT NULL,
+    type        text NOT NULL,
+    enabled     boolean NOT NULL DEFAULT true,
+    min_level   text NOT NULL DEFAULT 'warning',
+    config      jsonb NOT NULL DEFAULT '{}',
+    last_error  text NOT NULL DEFAULT '',
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE events ADD COLUMN IF NOT EXISTS rule_id integer;
+
+INSERT INTO settings (key, value) VALUES ('timezone', '"Europe/Kyiv"') ON CONFLICT (key) DO NOTHING;

@@ -10,6 +10,8 @@ import { GroupsPage } from "./pages/Groups";
 import { FirmwarePage } from "./pages/Firmware";
 import { EventsPage } from "./pages/Events";
 import { SettingsPage } from "./pages/Settings";
+import { RulesPage } from "./pages/Rules";
+import { AlertsPage } from "./pages/Alerts";
 // esptool-js великий, тому сторінку додавання завантажуємо лише коли її відкрили
 const AddModulePage = lazy(() => import("./pages/AddModule").then((m) => ({ default: m.AddModulePage })));
 
@@ -54,6 +56,8 @@ export function App() {
           <Route path="/firmware" element={<FirmwarePage />} />
           <Route path="/events" element={<EventsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/rules" element={<RulesPage />} />
+          <Route path="/alerts" element={<AlertsPage />} />
         </Routes>
       </main>
       <Toast />
@@ -73,6 +77,8 @@ function TopBar({ onLogout }: { onLogout: () => void }) {
         <NavLink to="/add">Додати модуль</NavLink>
         <NavLink to="/groups">Групи</NavLink>
         <NavLink to="/firmware">Прошивки</NavLink>
+        <NavLink to="/rules">Правила</NavLink>
+        <NavLink to="/alerts">Сповіщення<AlertBadge /></NavLink>
         <NavLink to="/events">Події</NavLink>
         <NavLink to="/settings">Налаштування</NavLink>
       </nav>
@@ -87,4 +93,13 @@ function TopBar({ onLogout }: { onLogout: () => void }) {
       <button className="small" onClick={onLogout}>Вийти</button>
     </div>
   );
+}
+
+// Кількість активних непідтверджених тривог; колір за найвищим рівнем
+function AlertBadge() {
+  const l = useLive();
+  const open = [...l.alerts.values()].filter((a) => !a.acknowledged_at);
+  if (!open.length) return null;
+  const lvl = open.some((a) => a.level === "alarm") ? "alarm" : open.some((a) => a.level === "warning") ? "warn" : "";
+  return <span className={"count " + lvl}>{open.length}</span>;
 }

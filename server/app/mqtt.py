@@ -13,6 +13,7 @@ import aiomqtt
 from . import db
 from .config import settings
 from .hub import hub
+from .rules import engine as rules_engine
 
 log = logging.getLogger("mqtt")
 
@@ -224,6 +225,7 @@ class MqttService:
                 self.rows.append((t, mid, k, float(v)))
             if clean:
                 hub.telemetry(mid, int(ts), clean)
+                rules_engine.feed(mid, int(ts), clean)
                 if latest is None or ts >= latest[0]:
                     latest = (ts, clean)
         if len(self.rows) > 200_000:  # аварійний запобіжник, якщо база недоступна
