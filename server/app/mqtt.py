@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import aiomqtt
 
-from . import db
+from . import db, modcfg
 from .config import settings
 from .hub import hub
 from .rules import engine as rules_engine
@@ -232,6 +232,14 @@ class MqttService:
             drop = len(self.rows) - 200_000
             del self.rows[:drop]
             self.stats["dropped"] += drop
+        alarms = data.get("alarms")
+        if isinstance(alarms, list):
+            alarms = sorted({a for a in alarms if isinstance(a, str) and METRIC_RE.match(a)})
+            old_alarms = set(m.get("alarms") or [])
+            if set(alarms) != old_alarms:
+                m["alarms"] = alarms  # одразу, щоб наступне повідомлення не повторило подію
+                values = {**(m.get("last_values") or {}), **(latest[1] if latest else {})}
+                asyncio.create_task(self._alarms_changed(mid, old_alarms, alarms, values))
         if latest:
             m["last_values"] = {**(m.get("last_values") or {}), **latest[1]}
             m["last_seen_at"] = now_utc()
@@ -240,6 +248,22 @@ class MqttService:
                 m["online"] = True
                 hub.broadcast({"type": "module", "data": public_module(m)})
             self.dirty_latest.add(mid)
+
+    async def _alarms_changed(self, mid: str, old: set[str], alarms: list[str], values: dict) -> None:
+        """Модуль повідомив інший набір показників поза нормою: події й підсвітка в інтерфейсі."""
+        m = self.modules.get(mid)
+        if m is None:
+            return
+        hub.broadcast({"type": "module", "data": public_module(m)})
+        try:
+            limits = m.get("limits") or {}
+            for k in sorted(set(alarms) - old):
+                await db.add_event(mid, modcfg.alarm_text(k, values.get(k), limits.get(k)), "alarm")
+            for k in sorted(old - set(alarms)):
+                await db.add_event(mid, modcfg.normal_text(k, values.get(k)))
+            await db.p().execute("UPDATE modules SET alarms = $2 WHERE id = $1", mid, alarms)
+        except Exception:
+            log.exception("Не вдалося записати зміну тривог %s", mid)
 
     async def _on_status(self, mid: str, data: dict) -> None:
         state = data.get("state")
@@ -378,8 +402,10 @@ class MqttService:
             await asyncio.sleep(15)
             try:
                 default = int(await db.get_setting("default_interval_s") or 1)
+                # У гібридному режимі модуль у нормі надсилає рідше: чекаємо за довшим інтервалом.
                 rows = await db.p().fetch(
-                    "SELECT m.id, COALESCE(m.interval_s, g.interval_s, $1) AS i FROM modules m "
+                    "SELECT m.id, GREATEST(COALESCE(m.interval_s, g.interval_s, $1), "
+                    "COALESCE((m.hybrid->>'normal_interval_s')::int, 0)) AS i FROM modules m "
                     "LEFT JOIN groups g ON g.id = m.group_id WHERE m.online", default)
                 now = now_utc()
                 for r in rows:
@@ -413,7 +439,8 @@ class MqttService:
             return
         if mid in self.modules:
             self.modules[mid]["config_rev"] = rev
-        await self.publish(f"dm/v1/{mid}/config", {"rev": rev, "interval_s": interval}, qos=1, retain=True)
+        cfg = {"rev": rev, "interval_s": interval, **modcfg.config_extra(self.modules.get(mid, {}))}
+        await self.publish(f"dm/v1/{mid}/config", cfg, qos=1, retain=True)
 
     async def send_command(self, mid: str, name: str, params: dict, batch_id: str | None = None) -> dict:
         cid = uuid.uuid4().hex[:16]
@@ -436,7 +463,7 @@ class MqttService:
 
 def public_module(m: dict) -> dict:
     keys = ("id", "name", "note", "group_id", "chip", "fw", "idf", "ip", "ssid", "reset_reason", "led", "caps",
-            "online", "interval_s", "config_rev", "applied_config_rev", "provisioned", "provision_denied_at",
+            "online", "interval_s", "hybrid", "filters", "limits", "alarms", "config_rev", "applied_config_rev", "provisioned", "provision_denied_at",
             "last_values", "last_seen_at", "last_status_at", "created_at")
     return {k: m.get(k) for k in keys}
 

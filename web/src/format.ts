@@ -5,6 +5,7 @@ export const METRIC_LABELS: Record<string, { label: string; unit: string; digits
   chip_temp_c: { label: "Температура чипа", unit: "°C", digits: 1 },
   uptime_s: { label: "Час роботи", unit: "с", digits: 0 },
   heap_free: { label: "Вільна пам'ять", unit: "байт", digits: 0 },
+  heap_min_free: { label: "Мінімум вільної пам'яті", unit: "байт", digits: 0 },
 };
 
 export function metricLabel(m: string) {
@@ -14,7 +15,7 @@ export function metricLabel(m: string) {
 export function fmtValue(metric: string, v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   if (metric === "uptime_s") return fmtDuration(v);
-  if (metric === "heap_free") return `${(v / 1024).toFixed(0)} КБ`;
+  if (metric === "heap_free" || metric === "heap_min_free") return `${(v / 1024).toFixed(0)} КБ`;
   const info = METRIC_LABELS[metric];
   const d = info ? info.digits : Math.abs(v) < 10 ? 2 : 1;
   return `${v.toFixed(d)}${info ? " " + info.unit : ""}`;
@@ -60,7 +61,8 @@ export type Level = "ok" | "warn" | "alarm" | "none";
 // Стан зв'язку: online за статусом, але без даних довше 3 інтервалів + 10 с — «немає даних».
 export function linkState(m: Module, now = Date.now()): { level: Level; text: string } {
   if (!m.online) return { level: "alarm", text: "Немає зв'язку" };
-  const interval = m.interval_s ?? m.effective_interval_s ?? 1;
+  // у гібридному режимі модуль у нормі надсилає рідше
+  const interval = Math.max(m.interval_s ?? m.effective_interval_s ?? 1, m.hybrid?.normal_interval_s ?? 0);
   if (m.last_seen_at) {
     const age = (now - new Date(m.last_seen_at).getTime()) / 1000;
     if (age > interval * 3 + 10) return { level: "warn", text: "Немає даних" };
@@ -68,12 +70,20 @@ export function linkState(m: Module, now = Date.now()): { level: Level; text: st
   return { level: "ok", text: "На зв'язку" };
 }
 
+// Підсвічування показника: якщо для нього задано межі норми на модулі, стан повідомляє сам модуль;
+// інакше типові пороги для показників самої плати.
+export function metricLevel(m: Module, metric: string): Level {
+  if (!m.online) return "none";
+  if (m.limits?.[metric]) return m.alarms?.includes(metric) ? "alarm" : "ok";
+  return valueLevel(metric, m.last_values?.[metric]);
+}
+
 // Пороги підсвічування для показників самої плати (етап 1).
 export function valueLevel(metric: string, v: number | undefined | null): Level {
   if (v === undefined || v === null) return "none";
   if (metric === "rssi") return v < -90 ? "alarm" : v < -80 ? "warn" : "ok";
   if (metric === "chip_temp_c") return v > 85 ? "alarm" : v > 70 ? "warn" : "ok";
-  if (metric === "heap_free") return v < 20000 ? "alarm" : v < 50000 ? "warn" : "ok";
+  if (metric === "heap_free" || metric === "heap_min_free") return v < 20000 ? "alarm" : v < 50000 ? "warn" : "ok";
   return "none";
 }
 

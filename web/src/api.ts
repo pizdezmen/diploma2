@@ -49,6 +49,10 @@ export interface Module {
   caps: string[];
   online: boolean;
   interval_s: number | null;
+  hybrid: Hybrid | null;
+  filters: Record<string, Filter>;
+  limits: Record<string, Limit>;
+  alarms: string[];
   config_rev: number;
   applied_config_rev: number;
   provisioned: boolean;
@@ -59,6 +63,22 @@ export interface Module {
   created_at: string;
   effective_interval_s?: number;
   metrics?: string[];
+}
+
+// Обробка на модулі (docs/PROTOCOL.md 3.5)
+export interface Hybrid {
+  normal_interval_s: number;
+  history_s: number;
+}
+export interface Filter {
+  type: "avg" | "median" | "ema";
+  window: number;
+  alpha: number;
+}
+export interface Limit {
+  min: number | null;
+  max: number | null;
+  hyst: number;
 }
 
 export interface Group {

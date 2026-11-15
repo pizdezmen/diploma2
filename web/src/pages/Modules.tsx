@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, Firmware, Group, Module } from "../api";
-import { fmtAgo, fmtValue, Level, linkState, moduleTitle, valueLevel } from "../format";
+import { fmtAgo, fmtValue, Level, linkState, metricLabel, metricLevel, moduleTitle } from "../format";
 import { useFetch, useNow } from "../hooks";
 import { useLive } from "../live";
 import { toast, toastError } from "../toast";
@@ -35,7 +35,7 @@ export function ModulesPage() {
       if (groupFilter !== "all" && groupFilter !== "none" && String(m.group_id) !== groupFilter) return false;
       const st = linkState(m, now).level;
       if (stateFilter === "online" && st !== "ok") return false;
-      if (stateFilter === "problem" && st === "ok") return false;
+      if (stateFilter === "problem" && st === "ok" && !(m.online && m.alarms?.length)) return false;
       return true;
     });
     const key = (m: Module): any => {
@@ -102,7 +102,7 @@ export function ModulesPage() {
   const cell = (m: Module, metric: string) => {
     const v = m.last_values?.[metric];
     const stale = !m.online;
-    const lvl: Level = stale ? "none" : valueLevel(metric, v);
+    const lvl: Level = metricLevel(m, metric);
     return (
       <td className={"num " + (lvl === "warn" || lvl === "alarm" ? lvl : "") + (stale ? " muted" : "")}>{fmtValue(metric, v)}</td>
     );
@@ -188,6 +188,7 @@ export function ModulesPage() {
                 <td><input type="checkbox" checked={selected.has(m.id)} onChange={() => toggle(m.id)} /></td>
                 <td className={st.level}>
                   {st.text}
+                  {m.online && m.alarms?.length > 0 && <span className="badge alarm" title={"Поза нормою: " + m.alarms.map(metricLabel).join(", ")}> тривога</span>}
                   {m.provision_denied_at && m.provisioned && <span className="badge warn" title="Модуль втратив пароль і просить новий. Відкрийте модуль і скиньте пароль MQTT."> пароль</span>}
                 </td>
                 <td><Link to={`/modules/${m.id}`}>{moduleTitle(m)}</Link></td>

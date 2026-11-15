@@ -37,6 +37,7 @@ interface Props {
   data: uPlot.AlignedData;
   height?: number;
   xRange?: [number, number]; // секунди
+  limits?: { min: number | null; max: number | null } | null; // межі норми: пунктирні лінії
 }
 
 function fmtTick(v: number, span: number) {
@@ -52,9 +53,11 @@ function fmtTick(v: number, span: number) {
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-export function Chart({ metric, data, height = 160, xRange }: Props) {
+export function Chart({ metric, data, height = 160, xRange, limits }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
+  const lim = useRef(limits);
+  lim.current = limits;
   const hasBand = data.length > 2;
 
   useEffect(() => {
@@ -73,7 +76,46 @@ export function Chart({ metric, data, height = 160, xRange }: Props) {
       height,
       series,
       axes: [{ ...axis, values: (u, vals) => vals.map((v) => fmtTick(v, (u.scales.x.max ?? 0) - (u.scales.x.min ?? 0))) }, { ...axis, size: 60, values: (_u, vals) => vals.map((v) => fmtValue(metric, v)) }],
-      scales: { x: { time: true } },
+      scales: {
+        x: { time: true },
+        // межі норми завжди в полі зору
+        y: {
+          range: (_u, dmin, dmax) => {
+            let lo = dmin, hi = dmax;
+            for (const b of [lim.current?.min, lim.current?.max]) {
+              if (b == null) continue;
+              lo = lo == null ? b : Math.min(lo, b);
+              hi = hi == null ? b : Math.max(hi, b);
+            }
+            if (lo == null || hi == null) return [0, 1];
+            if (lo === hi) return [lo - 1, hi + 1];
+            const pad = (hi - lo) * 0.08;
+            return [lo - pad, hi + pad];
+          },
+        },
+      },
+      hooks: {
+        draw: [
+          (u) => {
+            const l = lim.current;
+            if (!l) return;
+            const ctx = u.ctx;
+            ctx.save();
+            ctx.strokeStyle = css("--alarm");
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 4]);
+            for (const b of [l.min, l.max]) {
+              if (b == null) continue;
+              const y = Math.round(u.valToPos(b, "y", true)) + 0.5;
+              ctx.beginPath();
+              ctx.moveTo(u.bbox.left, y);
+              ctx.lineTo(u.bbox.left + u.bbox.width, y);
+              ctx.stroke();
+            }
+            ctx.restore();
+          },
+        ],
+      },
       legend: { live: true },
       cursor: { drag: { x: true, y: false } },
       bands: hasBand ? [{ series: [3, 2], fill: css("--band-fill") }] : undefined,
@@ -98,6 +140,10 @@ export function Chart({ metric, data, height = 160, xRange }: Props) {
     plot.current.setData(data, !xRange);
     if (xRange) plot.current.setScale("x", { min: xRange[0], max: xRange[1] });
   }, [data, xRange]);
+
+  useEffect(() => {
+    plot.current?.redraw(true);
+  }, [limits?.min, limits?.max]);
 
   return <div ref={ref} className="chart" />;
 }

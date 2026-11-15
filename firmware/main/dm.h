@@ -21,8 +21,9 @@ esp_err_t settings_init(void);
 bool      settings_get_mqtt_pass(char *buf, size_t len);
 esp_err_t settings_set_mqtt_pass(const char *pass);
 esp_err_t settings_erase_mqtt_pass(void);
-void      settings_get_config(uint32_t *rev, uint32_t *interval_s);
-esp_err_t settings_set_config(uint32_t rev, uint32_t interval_s);
+void      settings_get_config(uint32_t *rev, uint32_t *interval_s);   // старий формат (0.2.0)
+char     *settings_get_config_json(void);                           // NULL, якщо немає; звільнити free()
+esp_err_t settings_set_config_json(const char *json);
 
 // ---- netcfg.c: мережеві налаштування (NVS з сайту, інакше secrets.h) ----
 typedef struct {
@@ -65,6 +66,28 @@ bool mqtt_link_connected(void);
 int  mqtt_link_publish(const char *suffix, const char *data, int qos, bool retain);
 void mqtt_link_publish_status(void);
 void mqtt_link_offline_and_restart(const char *reason); // публікує offline, відключається і перезапускає модуль
+
+// ---- signal.c: фільтри і межі норми ----
+#define FILT_MAX_WINDOW 30
+typedef enum { FILT_NONE, FILT_AVG, FILT_MEDIAN, FILT_EMA } filt_type_t;
+typedef struct {
+    filt_type_t type;
+    uint8_t     window;              // для AVG і MEDIAN: 2..FILT_MAX_WINDOW
+    float       alpha;               // для EMA: 0.01..1
+    float       buf[FILT_MAX_WINDOW];
+    uint8_t     n, pos;
+    float       ema;
+    bool        ema_init;
+} filt_t;
+void  filt_reset(filt_t *f);
+float filt_apply(filt_t *f, float x); // NAN проходить без змін
+
+typedef struct {
+    bool  has_min, has_max;
+    float min, max, hyst;
+    bool  alarm;                     // поточний стан: поза нормою
+} limit_t;
+bool limit_update(limit_t *l, float v); // повертає новий стан alarm
 
 // ---- telemetry.c ----
 void     telemetry_start(void);
