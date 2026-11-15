@@ -100,7 +100,24 @@ export const CMD_STATUS: Record<string, { text: string; level: Level }> = {
   ok: { text: "Виконано", level: "ok" },
   error: { text: "Помилка", level: "alarm" },
   timeout: { text: "Немає відповіді", level: "alarm" },
+  waiting: { text: "Чекає черги", level: "none" },
+  offline: { text: "Не на зв'язку", level: "warn" },
+  skipped: { text: "Пропущено", level: "none" },
+  cancelled: { text: "Скасовано", level: "none" },
 };
+
+/** Порівнює версії на кшталт 0.5.1 за числами: >0, якщо a новіша за b. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(/[^0-9]+/).filter(Boolean).map(Number);
+  const pb = b.split(/[^0-9]+/).filter(Boolean).map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d) return d;
+  }
+  return a === b ? 0 : a < b ? -1 : 1;
+}
+
+export const CHIP_SHORT: Record<string, string> = { esp32s3: "S3", esp32c3: "C3" };
 
 export function cmdParams(c: { name: string; params: any }) {
   if (c.name === "led") return { on: "увімк.", off: "вимк.", blink: "блимати", breathe: "дихання", rainbow: "веселка" }[c.params?.mode as string] ?? "";
