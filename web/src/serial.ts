@@ -62,6 +62,17 @@ export async function resetAndClose(_loader: ESPLoader, transport: Transport) {
   }
 }
 
+/** Відкриває порт для обміну з прошивкою. Явно знімаємо DTR і RTS: на USB Serial/JTAG RTS=1 тримає чип у скиданні,
+ * а деякі драйвери (Windows) піднімають лінії під час відкриття. */
+export async function openForApp(port: SerialPort) {
+  await port.open({ baudRate: 115200 });
+  try {
+    await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+  } catch {
+    /* не всі драйвери це підтримують */
+  }
+}
+
 /** Після перезапуску USB Serial/JTAG плата підключається заново: шукаємо той самий порт серед дозволених. */
 export async function reopenPort(old: SerialPort, timeoutMs = 20000): Promise<SerialPort> {
   const info = old.getInfo();
@@ -73,7 +84,7 @@ export async function reopenPort(old: SerialPort, timeoutMs = 20000): Promise<Se
       const pi = p.getInfo();
       if (p !== old && (pi.usbVendorId !== info.usbVendorId || pi.usbProductId !== info.usbProductId)) continue;
       try {
-        await p.open({ baudRate: 115200 });
+        await openForApp(p);
         return p;
       } catch (e) {
         lastErr = e;

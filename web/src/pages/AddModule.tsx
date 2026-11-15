@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api, Firmware, Group } from "../api";
 import { useFetch } from "../hooks";
 import { live } from "../live";
-import { detectChip, ESPRESSIF_VID, flashImage, LineLink, reopenPort, resetAndClose, serialSupported } from "../serial";
+import { detectChip, ESPRESSIF_VID, flashImage, LineLink, openForApp, reopenPort, resetAndClose, serialSupported } from "../serial";
 
 interface Wifi {
   ssid: string;
@@ -112,10 +112,11 @@ export function AddModulePage() {
         await flashImage(loader, data, eraseAll, { log: addLog, progress: setProgress });
         setStep("reboot");
         await resetAndClose(loader, transport);
-        await new Promise((r) => setTimeout(r, 1500));
+        // плата з USB Serial/JTAG після скидання може зникнути з USB на 1–3 с
+        await new Promise((r) => setTimeout(r, 2500));
         port = await reopenPort(port);
       } else {
-        await port.open({ baudRate: 115200 });
+        await openForApp(port);
       }
 
       setStep("config");
