@@ -115,6 +115,10 @@ export interface LedAddon {
   driver: "gpio" | "ws2812";
   gpio: number;
   active_low: boolean;
+  color: string; // #rrggbb
+  brightness: number;
+  period_ms: number;
+  show_status: boolean;
 }
 export type Addon = DisplayAddon | LedAddon;
 // Стан, який повідомляє модуль; builtin — вбудоване в плату (світлодіод), його не налаштовують із сайту

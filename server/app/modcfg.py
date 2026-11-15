@@ -127,6 +127,10 @@ class LedAddon(BaseModel):
     driver: Literal["gpio", "ws2812"]
     gpio: int = Field(ge=0, le=48)
     active_low: bool = False
+    color: str = Field("#00ff00", pattern=r"^#[0-9a-fA-F]{6}$")  # для «увімк.», блимання, дихання
+    brightness: int = Field(20, ge=1, le=100)
+    period_ms: int = Field(500, ge=100, le=10000)  # період блимання, дихання, веселки
+    show_status: bool = False  # коли вимкнено вручну: зелений / жовтий (немає зв'язку) / червоний (поза нормою)
 
     def wire(self) -> dict:
         return self.model_dump(exclude={"title"})

@@ -75,6 +75,14 @@ static bool     s_pending_history;
 
 uint32_t telemetry_config_rev(void) { return s_config_rev; }
 
+bool telemetry_any_alarm(void)
+{
+    for (int i = 0; i < (int)N_METRICS; i++) {
+        if (s_cfg.lim[i].alarm) return true; // читання bool без блокування: найгірше — на крок пізніше
+    }
+    return false;
+}
+
 bool telemetry_value(const char *name, float *v, int *decimals)
 {
     int i = -1;

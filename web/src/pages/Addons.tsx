@@ -48,7 +48,8 @@ function stateCell(m: Module, st: AddonState | undefined, applied: boolean) {
   return st.ok ? <td className="ok">працює</td> : <td className="warn wrap">{st.error || "не працює"}</td>;
 }
 
-const LED_STATE: Record<string, string> = { on: "світиться", blink: "блимає", off: "вимкнено" };
+const LED_STATE: Record<string, string> = { on: "світиться", blink: "блимає", breathe: "дихає", rainbow: "веселка", off: "вимкнено" };
+const LED_MODES: [string, string][] = [["on", "Увімкнути"], ["blink", "Блимати"], ["breathe", "Дихання"], ["rainbow", "Веселка"], ["off", "Вимкнути"]];
 
 export function Addons({ m, metrics, onCommand }: { m: Module; metrics: string[]; onCommand: (name: string, params?: any) => void }) {
   const all = m.addons ?? [];
@@ -116,16 +117,16 @@ export function Addons({ m, metrics, onCommand }: { m: Module; metrics: string[]
               <td>на платі{ledState?.hw ? `, ${ledState.hw}` : ""}{ledCfg && !applied ? <span className="muted"> (змінюється)</span> : null}</td>
               <td>
                 <span className="seg">
-                  <button className={m.led === "on" ? "on" : ""} disabled={!m.online} onClick={() => onCommand("led", { mode: "on" })}>Увімкнути</button>
-                  <button className={m.led === "blink" ? "on" : ""} disabled={!m.online} onClick={() => onCommand("led", { mode: "blink" })}>Блимати</button>
-                  <button className={m.led === "off" ? "on" : ""} disabled={!m.online} onClick={() => onCommand("led", { mode: "off" })}>Вимкнути</button>
+                  {LED_MODES.filter(([k]) => (k !== "breathe" && k !== "rainbow") || m.caps?.includes("display")).map(([k, t]) => (
+                    <button key={k} className={m.led === k ? "on" : ""} disabled={!m.online} onClick={() => onCommand("led", { mode: k })}>{t}</button>
+                  ))}
                 </span>
               </td>
               {!m.online ? <td className="muted">немає зв'язку з модулем</td>
                 : ledState && !ledState.ok ? <td className="warn wrap">{ledState.error || "не працює"}</td>
-                : <td className="ok">{LED_STATE[m.led ?? "off"] ?? m.led}</td>}
+                : <td className="ok">{LED_STATE[m.led ?? "off"] ?? m.led}{m.led === "off" && ledCfg?.show_status ? ", показує стан" : ""}</td>}
               <td style={{ whiteSpace: "nowrap" }}>
-                <button disabled={busy || !!edit} onClick={() => setLedEdit(true)}>Підключення</button>
+                <button disabled={busy || !!edit} onClick={() => setLedEdit(true)}>Налаштувати</button>
               </td>
             </tr>
           )}
@@ -183,35 +184,75 @@ function LedEditor({ m, cfg, state, busy, onCancel, onSave }: {
   m: Module; cfg: LedAddon | undefined; state: AddonState | undefined; busy: boolean;
   onCancel: () => void; onSave: (led: LedAddon | null) => void;
 }) {
-  const def = m.chip === "esp32c3" ? { driver: "gpio" as const, gpio: 8, active_low: true } : { driver: "ws2812" as const, gpio: 48, active_low: false };
-  const cur = cfg ?? (state?.driver ? { driver: state.driver, gpio: state.gpio ?? def.gpio, active_low: !!state.active_low } : def);
-  const [driver, setDriver] = useState<LedAddon["driver"]>(cur.driver);
-  const [gpio, setGpio] = useState(String(cur.gpio));
-  const [low, setLow] = useState(cur.active_low);
+  const def = { driver: "ws2812" as const, gpio: m.chip === "esp32c3" ? 8 : 48, active_low: false };
+  const hw = cfg ?? (state?.driver ? { driver: state.driver, gpio: state.gpio ?? def.gpio, active_low: !!state.active_low } : def);
+  const [driver, setDriver] = useState<LedAddon["driver"]>(hw.driver);
+  const [gpio, setGpio] = useState(String(hw.gpio));
+  const [low, setLow] = useState(hw.active_low);
+  const [color, setColor] = useState(cfg?.color ?? "#00ff00");
+  const [brightness, setBrightness] = useState(cfg?.brightness ?? 20);
+  const [period, setPeriod] = useState(String(cfg?.period_ms ?? 500));
+  const [status, setStatus] = useState(cfg?.show_status ?? false);
+  const rgb = driver === "ws2812";
   return (
     <div className="panel" style={{ marginTop: 8 }}>
-      <div className="chart-title">Підключення вбудованого світлодіода</div>
-      <div className="form-row">
-        <label>Тип</label>
-        <select value={driver} onChange={(e) => setDriver(e.target.value as LedAddon["driver"])}>
-          <option value="ws2812">кольоровий RGB (WS2812)</option>
-          <option value="gpio">звичайний одноколірний</option>
-        </select>
+      <div className="chart-title">Вбудований світлодіод</div>
+      <div className="layout-2">
+        <div>
+          {rgb && (
+            <div className="form-row">
+              <label>Колір</label>
+              <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
+              <span className="mono">{color}</span>
+              <span className="note">для «Увімкнути», «Блимати» і «Дихання»</span>
+            </div>
+          )}
+          <div className="form-row">
+            <label>Яскравість, %</label>
+            <input type="range" min={1} max={100} value={brightness} onChange={(e) => setBrightness(Number(e.target.value))} style={{ flex: 1 }} disabled={!rgb} />
+            <span style={{ width: 40 }}>{rgb ? brightness : "—"}</span>
+          </div>
+          <div className="form-row">
+            <label>Швидкість ефектів, мс</label>
+            <input type="number" min={100} max={10000} step={100} value={period} onChange={(e) => setPeriod(e.target.value)} style={{ width: 90 }} />
+            <span className="note">повний цикл блимання, дихання чи веселки</span>
+          </div>
+          <div className="form-row">
+            <label>Показувати стан</label>
+            <label style={{ width: "auto" }}><input type="checkbox" checked={status} onChange={(e) => setStatus(e.target.checked)} /> коли світлодіод вимкнено</label>
+          </div>
+          <div className="note" style={{ margin: "-2px 0 6px 158px" }}>
+            Зелений — усе гаразд, жовтий — немає Wi-Fi чи сервера, червоний — показник поза нормою. «Увімкнути», «Блимати» та інші режими
+            з кнопок чи правил мають перевагу; «Вимкнути» повертає показ стану.
+          </div>
+        </div>
+        <div>
+          <div className="form-row">
+            <label>Тип</label>
+            <select value={driver} onChange={(e) => setDriver(e.target.value as LedAddon["driver"])}>
+              <option value="ws2812">кольоровий RGB (WS2812)</option>
+              <option value="gpio">звичайний одноколірний</option>
+            </select>
+          </div>
+          <div className="form-row">
+            <label>Вивід GPIO</label>
+            <input type="number" min={0} max={48} value={gpio} onChange={(e) => setGpio(e.target.value)} style={{ width: 70 }} />
+            {!rgb && (
+              <label style={{ width: "auto" }}><input type="checkbox" checked={low} onChange={(e) => setLow(e.target.checked)} /> інверсний</label>
+            )}
+          </div>
+          <div className="note">
+            Зазвичай: ESP32-S3 — RGB на GPIO48 (на деяких платах GPIO38), ESP32-C3 — RGB на GPIO8. Одноколірний світлодіод уміє лише
+            світитися й блимати.
+          </div>
+        </div>
       </div>
-      <div className="form-row">
-        <label>Вивід GPIO</label>
-        <input type="number" min={0} max={48} value={gpio} onChange={(e) => setGpio(e.target.value)} style={{ width: 70 }} />
-        {driver === "gpio" && (
-          <label style={{ width: "auto" }}><input type="checkbox" checked={low} onChange={(e) => setLow(e.target.checked)} /> Світиться при низькому рівні (інверсний)</label>
-        )}
-      </div>
-      <div className="note" style={{ marginBottom: 6 }}>
-        Типові плати: ESP32-S3 DevKitC-1 — RGB на GPIO48 (на деяких копіях GPIO38); ESP32-C3 SuperMini — синій на GPIO8, інверсний;
-        ESP32-C3 DevKitM-1 — RGB на GPIO8. Після збереження натисніть «Увімкнути» і перевірте.
-      </div>
-      <div className="toolbar">
-        <button className="primary" disabled={busy || gpio === ""} onClick={() => onSave({ type: "led", id: "led", title: "", driver, gpio: Number(gpio), active_low: driver === "gpio" && low })}>Зберегти</button>
-        <button disabled={busy || !cfg} onClick={() => onSave(null)} title="Прибрати налаштування з сайту: прошивка візьме підключення за замовчуванням">За замовчуванням</button>
+      <div className="toolbar" style={{ marginTop: 8 }}>
+        <button className="primary" disabled={busy || gpio === "" || period === ""} onClick={() => onSave({
+          type: "led", id: "led", title: "", driver, gpio: Number(gpio), active_low: !rgb && low,
+          color, brightness, period_ms: Number(period), show_status: status,
+        })}>Зберегти</button>
+        <button disabled={busy || !cfg} onClick={() => onSave(null)} title="Прибрати налаштування з сайту: прошивка візьме все за замовчуванням">За замовчуванням</button>
         <button disabled={busy} onClick={onCancel}>Скасувати</button>
       </div>
     </div>

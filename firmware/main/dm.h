@@ -95,6 +95,7 @@ void     telemetry_apply_config(const char *data, int len);
 uint32_t telemetry_config_rev(void);
 // Останнє значення показника (після фільтра); false, якщо такого показника немає або ще не виміряно.
 bool     telemetry_value(const char *name, float *v, int *decimals);
+bool     telemetry_any_alarm(void); // хоч один показник поза межами норми
 
 // ---- commands.c ----
 void commands_handle(const char *data, int len);
@@ -112,7 +113,13 @@ esp_err_t ota_start(const ota_request_t *req); // ESP_ERR_INVALID_STATE, якщ�
 bool      ota_busy(void);
 
 // ---- status_led.c ----
-typedef enum { LED_OFF, LED_ON, LED_BLINK } led_mode_t;
+typedef enum { LED_OFF, LED_ON, LED_BLINK, LED_BREATHE, LED_RAINBOW } led_mode_t;
+typedef struct {
+    uint8_t  r, g, b;      // колір для «увімк.», блимання і дихання
+    uint8_t  brightness;   // 1..100 %
+    uint16_t period_ms;    // період блимання, дихання, веселки
+    bool     show_status;  // коли вимкнено вручну, показувати стан: зелений / жовтий / червоний
+} led_look_t;
 typedef enum { LED_HW_GPIO, LED_HW_STRIP } led_hw_type_t;
 typedef struct {
     led_hw_type_t type;  // звичайний світлодіод на GPIO або адресний RGB (WS2812)
@@ -121,7 +128,8 @@ typedef struct {
 } led_hw_t;
 void        status_led_init(void);
 void        status_led_default_hw(led_hw_t *hw);           // із Kconfig
-void        status_led_configure(const led_hw_t *hw);      // з сайту (доповнення "led")
+void        status_led_default_look(led_look_t *look);
+void        status_led_configure(const led_hw_t *hw, const led_look_t *look); // з сайту (доповнення "led")
 void        status_led_get_hw(led_hw_t *hw, bool *ok);
 void        status_led_set(led_mode_t mode);
 const char *status_led_mode_str(void);

@@ -124,14 +124,22 @@ static void create_all(const cJSON *arr)
 
 // Вбудований світлодіод: запис {"type":"led","id":"led",...} змінює лише його підключення.
 // Без запису — підключення за замовчуванням із Kconfig.
+static int num_or(const cJSON *o, const char *k, int def, int lo, int hi)
+{
+    const cJSON *v = cJSON_GetObjectItem(o, k);
+    if (!cJSON_IsNumber(v)) return def;
+    return v->valueint < lo ? lo : v->valueint > hi ? hi : v->valueint;
+}
+
 static void apply_led(const cJSON *arr)
 {
     led_hw_t hw;
+    led_look_t look;
     status_led_default_hw(&hw);
+    status_led_default_look(&look);
     const cJSON *it;
     cJSON_ArrayForEach(it, arr) {
-        const cJSON *type = cJSON_GetObjectItem(it, "type");
-        if (!cJSON_IsString(type) || strcmp(type->valuestring, "led") != 0) continue;
+        if (!is_led(it)) continue;
         const cJSON *drv = cJSON_GetObjectItem(it, "driver"), *g = cJSON_GetObjectItem(it, "gpio");
         if (cJSON_IsString(drv)) hw.type = strcmp(drv->valuestring, "ws2812") == 0 ? LED_HW_STRIP : LED_HW_GPIO;
         char err[ADDON_ERR_LEN];
@@ -139,9 +147,17 @@ static void apply_led(const cJSON *arr)
             hw.gpio = g->valueint;
         }
         hw.active_low = cJSON_IsTrue(cJSON_GetObjectItem(it, "active_low"));
+        const cJSON *c = cJSON_GetObjectItem(it, "color");
+        unsigned rgb;
+        if (cJSON_IsString(c) && sscanf(c->valuestring, "#%6x", &rgb) == 1) {
+            look.r = rgb >> 16; look.g = rgb >> 8; look.b = rgb;
+        }
+        look.brightness = (uint8_t)num_or(it, "brightness", look.brightness, 1, 100);
+        look.period_ms = (uint16_t)num_or(it, "period_ms", look.period_ms, 100, 10000);
+        look.show_status = cJSON_IsTrue(cJSON_GetObjectItem(it, "show_status"));
         break;
     }
-    status_led_configure(&hw);
+    status_led_configure(&hw, &look);
 }
 
 void addons_apply_config(const char *json, int len)
