@@ -1,10 +1,11 @@
-// Точка входу. Етап 1: гола плата без датчиків.
+// Точка входу: показники самої плати, обробка на модулі, доповнення (екрани).
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "nvs_flash.h"
 #include "dm.h"
+#include "addons.h"
 
 static const char *TAG = "dm";
 
@@ -30,6 +31,7 @@ void app_main(void)
     esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     esp_netif_sntp_init(&sntp_cfg);
 
+    addons_init();   // до telemetry_start: та застосовує збережену конфігурацію доповнень
     telemetry_start();
     mqtt_link_run(); // не повертається
 }

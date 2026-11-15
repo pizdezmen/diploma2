@@ -93,6 +93,8 @@ bool limit_update(limit_t *l, float v); // повертає новий стан 
 void     telemetry_start(void);
 void     telemetry_apply_config(const char *data, int len);
 uint32_t telemetry_config_rev(void);
+// Останнє значення показника (після фільтра); false, якщо такого показника немає або ще не виміряно.
+bool     telemetry_value(const char *name, float *v, int *decimals);
 
 // ---- commands.c ----
 void commands_handle(const char *data, int len);

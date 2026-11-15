@@ -1,6 +1,7 @@
 """Обробка показників на модулі (етап 2, docs/PROTOCOL.md 3.5): фільтри, межі норми, гібридний режим.
 Налаштування зберігаються в таблиці modules і передаються модулю в retained-темі config."""
-from typing import Literal
+import json
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -50,6 +51,92 @@ class Limit(BaseModel):
         return out
 
 
+# ---------- Доповнення модуля (docs/PROTOCOL.md 3.7) ----------
+# Доповнення — пристрій, що підключається до плати (поки екрани). Кожен тип описується своєю моделлю
+# з полем type; список типів — ADDON_TYPES. Щоб додати новий тип, достатньо моделі й підтримки в прошивці.
+ADDON_ID = r"^[a-z0-9_-]{1,16}$"
+# Службові пункти, які екран може показати поряд із показниками
+DISPLAY_SERVICE_ITEMS = {"@name", "@id", "@fw", "@ip", "@ssid", "@link"}
+DISPLAY_ITEM_SRC = r"^(@[a-z]{1,15}|[a-z0-9_]{1,32})$"
+# Короткі підписи й одиниці на екрані 128 px (21 символ у рядку), якщо користувач не задав свої
+DISPLAY_DEFAULTS = {
+    "@name": ("Модуль", ""), "@id": ("ID", ""), "@fw": ("Прошивка", ""), "@ip": ("IP", ""),
+    "@ssid": ("Мережа", ""), "@link": ("Зв'язок", ""),
+    "rssi": ("Wi-Fi", "дБм"), "chip_temp_c": ("Темп. чипа", "°C"), "uptime_s": ("Працює", ""),
+    "heap_free": ("Пам'ять", "Б"), "heap_min_free": ("Мін. пам'ять", "Б"),
+}
+
+
+class DisplayItem(BaseModel):
+    src: str = Field(pattern=DISPLAY_ITEM_SRC)  # назва показника або службовий пункт (@name, @link ...)
+    label: str = Field("", max_length=24)       # підпис на екрані; порожньо = назва показника
+    unit: str = Field("", max_length=8)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.src.startswith("@") and self.src not in DISPLAY_SERVICE_ITEMS:
+            raise ValueError(f"невідомий службовий пункт {self.src}")
+        return self
+
+
+class DisplayAddon(BaseModel):
+    type: Literal["display"]
+    id: str = Field(pattern=ADDON_ID)
+    title: str = Field("", max_length=40)       # назва для людини в інтерфейсі, модулю не надсилається
+    enabled: bool = True
+    driver: Literal["ssd1306", "ssd1315", "sh1106"] = "ssd1306"
+    sda: int = Field(ge=0, le=48)
+    scl: int = Field(ge=0, le=48)
+    addr: int = Field(0x3C, ge=0x08, le=0x77)
+    height: Literal[64, 32] = 64
+    flip: bool = False                          # повернути зображення на 180°
+    button: int = Field(-1, ge=-1, le=48)       # кнопка, що будить екран і гортає сторінки; -1 = немає
+    brightness: int = Field(100, ge=1, le=100)  # відсотки
+    off_after_s: int = Field(0, ge=0, le=86400)  # гасити через N с після пробудження; 0 = не гасити
+    view: Literal["big", "list", "cycle"] = "list"
+    cycle_s: int = Field(5, ge=1, le=3600)      # зміна пункту (cycle) або сторінки списку
+    items: list[DisplayItem] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.sda == self.scl:
+            raise ValueError("SDA і SCL мають бути на різних виводах")
+        if self.button in (self.sda, self.scl):
+            raise ValueError("кнопка не може бути на виводі екрана")
+        return self
+
+    def wire(self) -> dict:
+        out = self.model_dump(exclude={"title"})
+        items = []
+        for i in self.items:
+            label, unit = DISPLAY_DEFAULTS.get(i.src, (i.src, ""))
+            it = {"src": i.src, "label": i.label or label}
+            if u := (i.unit or unit):
+                it["unit"] = u
+            items.append(it)
+        out["items"] = items
+        return out
+
+
+Addon = Annotated[Union[DisplayAddon], Field(discriminator="type")]
+ADDON_TYPES = {"display": DisplayAddon}
+ADDONS_MAX = 4
+CONFIG_MAX_BYTES = 3800  # модуль зберігає конфігурацію в NVS (до 4000 байт) і приймає до 4 КБ
+
+
+def check_addons(addons: list) -> None:
+    ids = [a.id for a in addons]
+    if len(ids) != len(set(ids)):
+        raise ValueError("ідентифікатори доповнень мають бути різними")
+    if len(addons) > ADDONS_MAX:
+        raise ValueError(f"не більше {ADDONS_MAX} доповнень на модуль")
+    displays = [a for a in addons if a.type == "display"]
+    for i, a in enumerate(displays):
+        for b in displays[i + 1:]:
+            if {a.sda, a.scl} == {b.sda, b.scl} and a.addr == b.addr:
+                raise ValueError(f"екрани {a.id} і {b.id} на одній шині з однаковою адресою 0x{a.addr:02X}")
+
+
 def validate_metrics(d: dict) -> None:
     import re
     for k in d:
@@ -66,7 +153,16 @@ def config_extra(m: dict) -> dict:
         out["filters"] = {k: Filter(**v).wire() for k, v in m["filters"].items()}
     if m.get("limits"):
         out["limits"] = {k: Limit(**v).wire() for k, v in m["limits"].items()}
+    addons = [ADDON_TYPES[a["type"]](**a) for a in (m.get("addons") or []) if a.get("type") in ADDON_TYPES]
+    if addons:
+        out["addons"] = [a.wire() for a in addons]
+        if any(i.src == "@name" for a in addons if a.type == "display" for i in a.items):
+            out["name"] = m.get("name") or ""
     return out
+
+
+def config_size(cfg: dict) -> int:
+    return len(json.dumps(cfg, ensure_ascii=False, separators=(",", ":")).encode())
 
 
 def _fmt(metric: str, v) -> str:

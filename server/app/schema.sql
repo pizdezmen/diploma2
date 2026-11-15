@@ -39,6 +39,9 @@ ALTER TABLE modules ADD COLUMN IF NOT EXISTS hybrid  jsonb;                     
 ALTER TABLE modules ADD COLUMN IF NOT EXISTS filters jsonb NOT NULL DEFAULT '{}'; -- показник -> фільтр
 ALTER TABLE modules ADD COLUMN IF NOT EXISTS limits  jsonb NOT NULL DEFAULT '{}'; -- показник -> межі норми
 ALTER TABLE modules ADD COLUMN IF NOT EXISTS alarms  jsonb NOT NULL DEFAULT '[]'; -- показники поза нормою (повідомляє модуль)
+-- Доповнення модуля (docs/PROTOCOL.md 3.7): налаштування з сайту і стан, який повідомляє модуль
+ALTER TABLE modules ADD COLUMN IF NOT EXISTS addons      jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE modules ADD COLUMN IF NOT EXISTS addon_state jsonb NOT NULL DEFAULT '[]';
 
 CREATE TABLE IF NOT EXISTS telemetry (
     time       timestamptz NOT NULL,

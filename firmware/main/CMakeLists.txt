@@ -13,12 +13,18 @@ idf_component_register(
         "netcfg.c"
         "serial_cfg.c"
         "signal.c"
-    INCLUDE_DIRS "."
+        "addons/addons.c"
+        "addons/i2c_bus.c"
+        "addons/display/addon_display.c"
+        "addons/display/oled.c"
+        "addons/display/gfx.c"
+        "addons/display/font_data.c"
+    INCLUDE_DIRS "." "addons" "addons/display"
     REQUIRES
         nvs_flash esp_wifi esp_netif esp_event esp_timer esp_http_client
         esp_https_ota app_update mqtt json mbedtls esp_driver_tsens
         esp_driver_gpio esp_app_format spi_flash esp_psram
-        esp_driver_usb_serial_jtag
+        esp_driver_usb_serial_jtag esp_driver_i2c
 )
 
 # Збірка для сайту: без значень із secrets.h (idf.py ... -D DM_NO_SECRETS=1)
