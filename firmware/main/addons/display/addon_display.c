@@ -190,6 +190,15 @@ static void describe_bus(disp_t *d, esp_err_t pe)
 
 static bool init_hw(disp_t *d, int64_t now)
 {
+    if (!i2c_bus_exists(d->sda, d->scl)) {
+        int stuck = i2c_bus_stuck_line(d->sda, d->scl);
+        if (stuck >= 0) {
+            snprintf(d->err, sizeof(d->err), "лінія %s (GPIO%d) притиснута до землі: перевірте дроти, чи не переплутані VCC і GND",
+                     stuck == d->sda ? "SDA" : "SCL", stuck);
+            addons_utf8_fix(d->err);
+            return false;
+        }
+    }
     esp_err_t e = i2c_bus_acquire(d->sda, d->scl, &d->bus);
     if (e != ESP_OK) {
         d->bus = NULL;

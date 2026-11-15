@@ -1,5 +1,7 @@
 #include "soc/soc_caps.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
+#include "driver/gpio.h"
 #include "i2c_bus.h"
 
 static const char *TAG = "i2c_bus";
@@ -61,4 +63,31 @@ void i2c_bus_release(i2c_master_bus_handle_t bus)
             b->bus = NULL;
         }
     }
+}
+
+bool i2c_bus_exists(int sda, int scl)
+{
+    for (int i = 0; i < SOC_I2C_NUM; i++) {
+        if (s_buses[i].refs && s_buses[i].sda == sda && s_buses[i].scl == scl) return true;
+    }
+    return false;
+}
+
+int i2c_bus_stuck_line(int sda, int scl)
+{
+    int pins[2] = { sda, scl };
+    int stuck = -1;
+    for (int k = 0; k < 2 && stuck < 0; k++) {
+        gpio_config_t io = { .pin_bit_mask = 1ULL << pins[k], .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE };
+        gpio_config(&io);
+        esp_rom_delay_us(200);
+        int low = 0;
+        for (int n = 0; n < 5; n++) {
+            low += gpio_get_level(pins[k]) == 0;
+            esp_rom_delay_us(100);
+        }
+        if (low == 5) stuck = pins[k];
+        gpio_reset_pin(pins[k]);
+    }
+    return stuck;
 }
