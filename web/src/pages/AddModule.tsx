@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api, Firmware, Group } from "../api";
 import { useFetch } from "../hooks";
 import { live } from "../live";
-import { BoardInfo, detectChip, ESPRESSIF_VID, flashImage, LineLink, openForApp, probeBoard, reopenPort, resetAndClose, serialSupported } from "../serial";
+import { BoardInfo, detectChip, ESPRESSIF_VID, portKind, flashImage, LineLink, openForApp, probeBoard, reopenPort, resetAndClose, serialSupported } from "../serial";
 import { fmtAgo, moduleTitle } from "../format";
 import { useLive } from "../live";
 
@@ -47,9 +47,14 @@ const STEP_TEXT: Record<Step, string> = {
   error: "Помилка",
 };
 
+/** Помилка, після якої треба ввести плату в режим прошивання кнопками і вибрати порт заново. */
+class NeedBootMode extends Error {}
+/** Прошивку записано, але порт після перезапуску треба вибрати вручну. */
+class NeedPortAgain extends Error {}
+
 interface KnownPort {
   port: SerialPort;
-  state: "checking" | "ours" | "silent" | "error";
+  state: "checking" | "ours" | "silent" | "error" | "factory" | "bootloader";
   info?: BoardInfo;
 }
 
@@ -70,6 +75,7 @@ export function AddModulePage() {
   const [info, setInfo] = useState<{ chip?: string; fw?: string; id?: string; image?: string }>({});
   const [error, setError] = useState("");
   const [hint, setHint] = useState("");
+  const [help, setHelp] = useState<"" | "boot" | "port">("");
   const [log, setLog] = useState<string[]>([]);
   const logRef = useRef<HTMLPreElement>(null);
 
@@ -95,6 +101,12 @@ export function AddModulePage() {
     for (const port of list) {
       if (busyRef.current) return;
       let item: KnownPort;
+      const kind = portKind(port);
+      if (kind === "other" || kind === "rom") {
+        item = { port, state: kind === "rom" ? "bootloader" : "factory" };
+        setPorts((cur) => cur.map((x) => (x.port === port ? item : x)));
+        continue;
+      }
       try {
         const info = await probeBoard(port);
         item = info ? { port, state: "ours", info } : { port, state: "silent" };
@@ -120,6 +132,8 @@ export function AddModulePage() {
   function boardStatus(k: KnownPort): { text: string; cls: string } {
     if (k.state === "checking") return { text: "перевіряю…", cls: "muted" };
     if (k.state === "error") return { text: "порт зайнятий іншою програмою", cls: "warn" };
+    if (k.state === "factory") return { text: "заводська прошивка: перед прошиванням введіть плату в режим прошивання кнопками BOOT і RST", cls: "warn" };
+    if (k.state === "bootloader") return { text: "у режимі прошивання, можна прошивати", cls: "ok" };
     if (k.state === "silent") return { text: "не відповідає: порожня плата, інша прошивка або потрібен RST", cls: "" };
     const m = k.info && l.modules.get(k.info.id);
     if (!m) return { text: "нова плата з нашою прошивкою, ще не в системі", cls: "" };
@@ -140,6 +154,7 @@ export function AddModulePage() {
     }
     setError("");
     setHint("");
+    setHelp("");
     setLog([]);
     setInfo({});
     setProgress(0);
@@ -151,7 +166,7 @@ export function AddModulePage() {
 
       if (!skip) {
         // Якщо на платі вже остання прошивка, пропонуємо не перепрошувати
-        const b = await probeBoard(port, 2500).catch(() => null);
+        const b = portKind(port) === "jtag" ? await probeBoard(port, 2500).catch(() => null) : null;
         if (b) {
           setInfo((i) => ({ ...i, id: b.id, chip: b.chip, fw: b.fw }));
           const fw = latest(b.chip);
@@ -165,7 +180,18 @@ export function AddModulePage() {
 
       if (!skip) {
         setStep("detect");
-        const { chip, loader, transport } = await detectChip(port, { log: addLog, progress: setProgress });
+        if (portKind(port) === "other") {
+          addLog(`Плата видна як USB-пристрій ${port.getInfo().usbProductId?.toString(16)}: на ній заводська або чужа прошивка з власним USB`);
+          throw new NeedBootMode("");
+        }
+        let det;
+        try {
+          det = await detectChip(port, { log: addLog, progress: setProgress });
+        } catch (e: any) {
+          addLog(String(e?.message || e));
+          throw new NeedBootMode("");
+        }
+        const { chip, loader, transport } = det;
         setInfo((i) => ({ ...i, chip }));
         const fw = latest(chip);
         if (!fw) {
@@ -183,7 +209,12 @@ export function AddModulePage() {
         await resetAndClose(loader, transport);
         // плата з USB Serial/JTAG після скидання може зникнути з USB на 1–3 с
         await new Promise((r) => setTimeout(r, 2500));
-        port = await reopenPort(port);
+        try {
+          port = await reopenPort(port);
+        } catch {
+          // з режиму завантажувача плата після RST з'являється як інший USB-пристрій, і браузер вимагає вибрати його знову
+          throw new NeedPortAgain("");
+        }
       } else {
         await openForApp(port);
       }
@@ -199,7 +230,11 @@ export function AddModulePage() {
         if (!link.alive) {
           await link.close();
           addLog("Порт закрився, підключаюся знову…");
-          port = await reopenPort(port, 20000);
+          try {
+            port = await reopenPort(port, 20000);
+          } catch {
+            throw new NeedPortAgain("");
+          }
           link = new LineLink(port, addLog);
           link.start();
         }
@@ -265,7 +300,15 @@ export function AddModulePage() {
         return;
       }
       setHint("");
-      setError(e?.message || String(e));
+      if (e instanceof NeedBootMode) {
+        setHelp("boot");
+        setError("Плата не перейшла в режим прошивання сама.");
+      } else if (e instanceof NeedPortAgain) {
+        setHelp("port");
+        setError("Прошивку записано, але сайт не знайшов плату після перезапуску.");
+      } else {
+        setError(e?.message || String(e));
+      }
       setStep("error");
     } finally {
       if (link) await link.close();
@@ -403,6 +446,27 @@ export function AddModulePage() {
       )}
       {hint && <div className="panel" style={{ borderColor: "var(--warn)", color: "var(--warn)", marginTop: 8 }}>{hint}</div>}
       {error && <div className="err">{error}</div>}
+      {help === "boot" && (
+        <div className="panel" style={{ borderColor: "var(--warn)", marginTop: 8 }}>
+          <b>Введіть плату в режим прошивання кнопками</b> (так буває з новими платами із заводською прошивкою):
+          <ol>
+            <li>Затисніть кнопку <b>BOOT</b> (на деяких платах B, IO0 або IO9).</li>
+            <li>Не відпускаючи її, коротко натисніть <b>RST</b> (або RESET, EN, R).</li>
+            <li>Відпустіть BOOT. Інший спосіб: тримаючи BOOT, вставте кабель USB.</li>
+            <li>Натисніть кнопку нижче і виберіть плату. Порт може називатися інакше, ніж до цього.</li>
+          </ol>
+          <button className="primary" disabled={!canRun} onClick={() => run(undefined, false)}>Вибрати порт ще раз і прошити</button>
+        </div>
+      )}
+      {help === "port" && (
+        <div className="panel" style={{ borderColor: "var(--warn)", marginTop: 8 }}>
+          Натисніть на платі <b>RST</b> (без BOOT), зачекайте 3 секунди, потім натисніть кнопку нижче і виберіть плату ще раз.
+          Прошивати знову не треба: сайт лише запише Wi-Fi і налаштування.
+          <div style={{ marginTop: 8 }}>
+            <button className="primary" disabled={!canConfigure} onClick={() => run(undefined, true)}>Вибрати порт і записати налаштування</button>
+          </div>
+        </div>
+      )}
       {log.length > 0 && (
         <>
           <h2>Журнал</h2>
