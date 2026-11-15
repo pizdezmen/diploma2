@@ -45,11 +45,31 @@ export async function flashImage(loader: ESPLoader, data: Uint8Array, eraseAll: 
   });
 }
 
-export async function resetAndClose(loader: ESPLoader, transport: Transport) {
+/**
+ * Перезапуск у прошивку після запису. HardReset з esptool-js 0.7.1 лише ставить RTS=0, а після підключення
+ * RTS уже 0, тож плата лишалася в завантажувачі. Робимо імпульс самі, як esptool.py для USB Serial/JTAG:
+ * DTR=0 (не входити в завантажувач), RTS=1 (скидання), пауза, RTS=0.
+ */
+export async function resetAndClose(_loader: ESPLoader, transport: Transport) {
   try {
-    await loader.after("hard_reset");
+    await transport.setDTR(false);
+    await transport.setRTS(true);
+    await sleep(200);
+    await transport.setRTS(false);
+    await sleep(200);
   } finally {
     await transport.disconnect().catch(() => {});
+  }
+}
+
+/** Відкриває порт для обміну з прошивкою. Явно знімаємо DTR і RTS: на USB Serial/JTAG RTS=1 тримає чип у скиданні,
+ * а деякі драйвери (Windows) піднімають лінії під час відкриття. */
+export async function openForApp(port: SerialPort) {
+  await port.open({ baudRate: 115200 });
+  try {
+    await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+  } catch {
+    /* не всі драйвери це підтримують */
   }
 }
 
@@ -64,7 +84,7 @@ export async function reopenPort(old: SerialPort, timeoutMs = 20000): Promise<Se
       const pi = p.getInfo();
       if (p !== old && (pi.usbVendorId !== info.usbVendorId || pi.usbProductId !== info.usbProductId)) continue;
       try {
-        await p.open({ baudRate: 115200 });
+        await openForApp(p);
         return p;
       } catch (e) {
         lastErr = e;
@@ -165,6 +185,11 @@ export class LineLink {
       if (r) return r;
     }
     return null;
+  }
+
+  /** Порт ще живий (плата не відключилася від USB). */
+  get alive() {
+    return !this.closed && !!this.port.readable;
   }
 
   async close() {

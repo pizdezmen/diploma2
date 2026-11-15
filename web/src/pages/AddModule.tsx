@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api, Firmware, Group } from "../api";
 import { useFetch } from "../hooks";
 import { live } from "../live";
-import { detectChip, ESPRESSIF_VID, flashImage, LineLink, reopenPort, resetAndClose, serialSupported } from "../serial";
+import { detectChip, ESPRESSIF_VID, flashImage, LineLink, openForApp, reopenPort, resetAndClose, serialSupported } from "../serial";
 
 interface Wifi {
   ssid: string;
@@ -17,7 +17,8 @@ interface Provisioning {
   token: string;
 }
 
-const STORE_KEY = "dm.addModule.wifi";
+// v2: попередня версія могла зберегти підставлені браузером логін і пароль сайту замість Wi-Fi
+const STORE_KEY = "dm.addModule.wifi.v2";
 const CHIP_TITLE: Record<string, string> = { esp32s3: "ESP32-S3", esp32c3: "ESP32-C3" };
 
 function loadWifi(): Wifi[] {
@@ -59,6 +60,7 @@ export function AddModulePage() {
   const [progress, setProgress] = useState(0);
   const [info, setInfo] = useState<{ chip?: string; fw?: string; id?: string; image?: string }>({});
   const [error, setError] = useState("");
+  const [hint, setHint] = useState("");
   const [log, setLog] = useState<string[]>([]);
   const logRef = useRef<HTMLPreElement>(null);
 
@@ -82,6 +84,7 @@ export function AddModulePage() {
       /* */
     }
     setError("");
+    setHint("");
     setLog([]);
     setInfo({});
     setProgress(0);
@@ -109,17 +112,36 @@ export function AddModulePage() {
         await flashImage(loader, data, eraseAll, { log: addLog, progress: setProgress });
         setStep("reboot");
         await resetAndClose(loader, transport);
-        await new Promise((r) => setTimeout(r, 1500));
+        // плата з USB Serial/JTAG після скидання може зникнути з USB на 1–3 с
+        await new Promise((r) => setTimeout(r, 2500));
         port = await reopenPort(port);
       } else {
-        await port.open({ baudRate: 115200 });
+        await openForApp(port);
       }
 
       setStep("config");
       link = new LineLink(port, addLog);
       link.start();
-      const hello = await link.request({ cmd: "info" }, 1000, 20000);
-      if (!hello?.ok) throw new Error("Модуль не відповідає на команду info. Можливо, на ньому стара прошивка без налаштування через USB.");
+      // Чекаємо відповіді на info до 75 с. Через 15 с просимо натиснути RST: якщо плата лишилась у завантажувачі,
+      // кнопка запускає прошивку. Після RST плата може заново підключитися до USB, тоді відкриваємо порт ще раз.
+      let hello: any = null;
+      const t0 = Date.now();
+      while (!hello && Date.now() - t0 < 75000) {
+        if (!link.alive) {
+          await link.close();
+          addLog("Порт закрився, підключаюся знову…");
+          port = await reopenPort(port, 20000);
+          link = new LineLink(port, addLog);
+          link.start();
+        }
+        hello = await link.request({ cmd: "info" }, 1000, 3000).catch(() => null);
+        if (!hello && Date.now() - t0 > 15000) setHint("Модуль не відповідає. Натисніть на платі кнопку RST (або RESET/EN) один раз і зачекайте.");
+      }
+      setHint("");
+      if (!hello?.ok)
+        throw new Error(
+          "Модуль не відповідає на команду info. Натисніть RST на платі і спробуйте ще раз з позначкою «Не прошивати, лише записати налаштування». Якщо не допоможе, на платі може бути прошивка без налаштування через USB.",
+        );
       setInfo((i) => ({ ...i, id: hello.id, chip: hello.chip, fw: hello.fw }));
       const existing = live.modules.get(hello.id);
       if (existing?.provisioned) {
@@ -172,6 +194,7 @@ export function AddModulePage() {
         setStep("idle"); // користувач закрив вікно вибору порту
         return;
       }
+      setHint("");
       setError(e?.message || String(e));
       setStep("error");
     } finally {
@@ -199,14 +222,17 @@ export function AddModulePage() {
 
       <h2>Wi-Fi для модуля</h2>
       <div className="panel">
+        <p className="note" style={{ marginTop: 0 }}>
+          Мережа, до якої підключатиметься плата (не логін і пароль цього сайту). Плати ESP32 працюють лише з Wi-Fi 2,4 ГГц.
+        </p>
         {wifi.map((w, i) => (
           <div className="form-row" key={i}>
             <label>{i === 0 ? "Основна мережа" : "Запасна мережа"}</label>
-            <input placeholder="Назва мережі" value={w.ssid} disabled={busy}
-              onChange={(e) => setWifi(wifi.map((x, j) => (j === i ? { ...x, ssid: e.target.value } : x)))} style={{ width: 220 }} />
-            <input placeholder="Пароль" type="password" value={w.pass} disabled={busy}
-              onChange={(e) => setWifi(wifi.map((x, j) => (j === i ? { ...x, pass: e.target.value } : x)))} style={{ width: 220 }} />
-            {i === 1 && <span className="note">необов'язково</span>}
+            <NoAutofill placeholder="Назва мережі Wi-Fi (SSID)" value={w.ssid} disabled={busy} name={`dm-wifi-ssid-${i}`}
+              onChange={(v) => setWifi(wifi.map((x, j) => (j === i ? { ...x, ssid: v } : x)))} />
+            <NoAutofill placeholder="Пароль Wi-Fi" secret value={w.pass} disabled={busy} name={`dm-wifi-key-${i}`}
+              onChange={(v) => setWifi(wifi.map((x, j) => (j === i ? { ...x, pass: v } : x)))} />
+            <span className="note">{i === 0 ? "обов'язково" : "необов'язково, якщо основна недоступна"}</span>
           </div>
         ))}
         <label><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Запам'ятати мережі в цьому браузері</label>
@@ -270,6 +296,7 @@ export function AddModulePage() {
       {step === "done" && info.id && (
         <p className="ok-text">Модуль на зв'язку. <Link to={`/modules/${info.id}`}>Відкрити модуль</Link>. Можна підключати наступну плату.</p>
       )}
+      {hint && <div className="panel" style={{ borderColor: "var(--warn)", color: "var(--warn)", marginTop: 8 }}>{hint}</div>}
       {error && <div className="err">{error}</div>}
       {log.length > 0 && (
         <>
@@ -278,5 +305,40 @@ export function AddModulePage() {
         </>
       )}
     </div>
+  );
+}
+
+/** Поле, яке менеджер паролів браузера не сприймає як логін або пароль сайту. */
+function NoAutofill(props: { value: string; onChange: (v: string) => void; placeholder: string; name: string; disabled?: boolean; secret?: boolean }) {
+  // readOnly до фокусу: Chrome і менеджери паролів не заповнюють такі поля під час завантаження сторінки
+  const [ro, setRo] = useState(true);
+  const [show, setShow] = useState(false);
+  return (
+    <span style={{ display: "inline-flex", gap: 4 }}>
+      <input
+        type={props.secret && !show ? "password" : "text"}
+        name={props.name}
+        autoComplete={props.secret ? "new-password" : "off"}
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        data-lpignore="true"
+        data-1p-ignore="true"
+        data-bwignore="true"
+        data-form-type="other"
+        readOnly={ro}
+        onFocus={() => setRo(false)}
+        placeholder={props.placeholder}
+        value={props.value}
+        disabled={props.disabled}
+        onChange={(e) => props.onChange(e.target.value)}
+        style={{ width: 220 }}
+      />
+      {props.secret && (
+        <button type="button" className="small" onClick={() => setShow(!show)} title={show ? "Сховати" : "Показати"}>
+          {show ? "Сховати" : "Показати"}
+        </button>
+      )}
+    </span>
   );
 }

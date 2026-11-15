@@ -95,7 +95,7 @@ table.kv th { position: static; width: 190px; }
 .u-select { background: #4ea1ff22; }
 
 .form-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
-.form-row label { width: 150px; color: var(--muted); }
+.form-row label { width: 150px; flex-shrink: 0; color: var(--muted); }
 .err { color: var(--alarm); margin: 6px 0; }
 .note { color: var(--muted); }
 .badge { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); }
