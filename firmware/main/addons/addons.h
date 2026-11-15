@@ -34,6 +34,11 @@ void        addons_add_caps(cJSON *caps);
 // Назва модуля із сайту (поле "name" конфігурації); порожня, якщо не задана.
 void        addons_module_name(char *buf, size_t len);
 
+// Дані з сервера для екранів (команда screen, PROTOCOL.md 3.7.3): об'єкт {"ключ": "текст"}, замінює попередній.
+void        addons_srv_set(const cJSON *values);
+// Текст за ключем; false, якщо сервер такого не надсилав.
+bool        addons_srv_get(const char *key, char *buf, size_t len);
+
 // Обрізає незавершений символ UTF-8 у кінці рядка (після snprintf/strlcpy з обрізанням).
 void        addons_utf8_fix(char *s);
 

@@ -1,7 +1,8 @@
 // Доповнення модуля (docs/PROTOCOL.md 3.7): вбудовані (світлодіод) і підключені (екрани).
 import { useEffect, useState } from "react";
 import { api, Addon, AddonState, DisplayAddon, DisplayItem, LedAddon, Module } from "../api";
-import { metricLabel } from "../format";
+import { metricLabel, moduleTitle } from "../format";
+import { useLive } from "../live";
 import { toast, toastError } from "../toast";
 
 const TYPE_LABELS: Record<string, string> = { display: "Екран", led: "Світлодіод" };
@@ -28,7 +29,19 @@ function defaultPins(chip: string | null) {
   return chip === "esp32c3" ? { sda: 5, scl: 6, button: 9 } : { sda: 8, scl: 9, button: 0 };
 }
 
-const itemName = (src: string) => SERVICE[src] ?? metricLabel(src);
+// Дані, яких немає на самому модулі: сталий текст, показник іншого модуля, повідомлення правила
+const DATA: Record<string, string> = {
+  "@text": "Текст",
+  "@remote": "Показник іншого модуля",
+  "@msg": "Повідомлення правила",
+};
+
+function itemName(it: DisplayItem, title: (id: string) => string) {
+  if (it.src === "@text") return `«${it.text ?? ""}»`;
+  if (it.src === "@remote") return `${metricLabel(it.metric ?? "")} (${title(it.module ?? "")})`;
+  if (it.src === "@msg") return `повідомлення ${it.slot ?? 1}`;
+  return SERVICE[it.src] ?? metricLabel(it.src);
+}
 
 function newDisplay(m: Module, existing: DisplayAddon[]): DisplayAddon {
   let n = 1;
@@ -59,6 +72,8 @@ export function Addons({ m, metrics, onCommand }: { m: Module; metrics: string[]
   const [edit, setEdit] = useState<{ index: number; draft: DisplayAddon } | null>(null);
   const [ledEdit, setLedEdit] = useState(false);
   const [busy, setBusy] = useState(false);
+  const l = useLive();
+  const title = (id: string) => { const x = l.modules.get(id); return x ? moduleTitle(x) : id; };
   const supported = m.caps?.includes("display");
   const applied = m.applied_config_rev === m.config_rev;
 
@@ -135,7 +150,7 @@ export function Addons({ m, metrics, onCommand }: { m: Module; metrics: string[]
               <td>{a.title || a.id} {!a.enabled && <span className="badge">вимкнено</span>}</td>
               <td>{TYPE_LABELS[a.type] ?? a.type} <span className="muted">{a.driver.toUpperCase()} {a.height === 32 ? "128×32" : "128×64"}</span></td>
               <td className="mono">SDA {a.sda}, SCL {a.scl}, 0x{a.addr.toString(16).toUpperCase()}</td>
-              <td className="wrap">{VIEW_LABELS[a.view]}: {a.items.map((x) => x.label || itemName(x.src)).join(", ") || "нічого"}</td>
+              <td className="wrap">{VIEW_LABELS[a.view]}: {a.items.map((x) => x.label || itemName(x, title)).join(", ") || "нічого"}</td>
               {stateCell(m, states.find((s) => s.id === a.id && !s.builtin), applied)}
               <td style={{ whiteSpace: "nowrap" }}>
                 <button disabled={busy || ledEdit} onClick={() => setEdit({ index: i, draft: structuredClone(a) })}>Змінити</button>{" "}
@@ -259,6 +274,13 @@ function LedEditor({ m, cfg, state, busy, onCancel, onSave }: {
   );
 }
 
+// Підказка в полі підпису: що буде, якщо його не заповнити
+function labelHint(it: DisplayItem) {
+  if (it.src === "@text" || it.src === "@msg") return "без підпису";
+  if (it.src === "@remote") return DEFAULT_LABEL[it.metric ?? ""] ?? it.metric ?? "";
+  return DEFAULT_LABEL[it.src] ?? it.src;
+}
+
 function DisplayEditor({ m, metrics, draft, isNew, busy, onCancel, onSave }: {
   m: Module; metrics: string[]; draft: DisplayAddon; isNew: boolean; busy: boolean;
   onCancel: () => void; onSave: (d: DisplayAddon) => void;
@@ -277,6 +299,20 @@ function DisplayEditor({ m, metrics, draft, isNew, busy, onCancel, onSave }: {
     const ia = METRIC_ORDER.indexOf(a), ib = METRIC_ORDER.indexOf(b);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
   });
+  const l = useLive();
+  const others = [...l.modules.values()].filter((x) => x.id !== m.id).sort((a, b) => moduleTitle(a).localeCompare(moduleTitle(b)));
+  const metricsOf = (id: string | null | undefined) => {
+    const x = id ? l.modules.get(id) : undefined;
+    return [...new Set([...METRIC_ORDER, ...Object.keys(x?.last_values ?? {})])];
+  };
+  const pickSrc = (i: number, src: string) => {
+    if (src === "@remote") {
+      const mod = d.items[i].module ?? others[0]?.id ?? null;
+      setItem(i, { src, module: mod, metric: d.items[i].metric ?? "chip_temp_c" });
+    } else setItem(i, { src, slot: d.items[i].slot ?? 1 });
+  };
+  const supportsData = m.caps?.includes("screen_data");
+  const usesData = d.items.some((x) => x.src in DATA);
   const pins = defaultPins(m.chip);
   const perPage = d.height === 64 ? 6 : 3;
 
@@ -357,19 +393,45 @@ function DisplayEditor({ m, metrics, draft, isNew, busy, onCancel, onSave }: {
               {d.items.map((it, i) => (
                 <tr key={i}>
                   <td>
-                    <select value={it.src} onChange={(e) => setItem(i, { src: e.target.value })}>
+                    <select value={it.src} onChange={(e) => pickSrc(i, e.target.value)}>
                       <optgroup label="Показники">
                         {allMetrics.map((k) => <option key={k} value={k}>{metricLabel(k)}</option>)}
                       </optgroup>
                       <optgroup label="Службові">
                         {Object.entries(SERVICE).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                       </optgroup>
+                      <optgroup label="Інше">
+                        {Object.entries(DATA).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      </optgroup>
                     </select>
+                    {it.src === "@text" && (
+                      <div><input value={it.text ?? ""} maxLength={60} placeholder="текст на екрані" onChange={(e) => setItem(i, { text: e.target.value })} style={{ width: 200, marginTop: 4 }} /></div>
+                    )}
+                    {it.src === "@remote" && (
+                      <div style={{ marginTop: 4 }}>
+                        <select value={it.module ?? ""} onChange={(e) => setItem(i, { module: e.target.value })}>
+                          {!it.module && <option value="">оберіть модуль</option>}
+                          {others.map((x) => <option key={x.id} value={x.id}>{moduleTitle(x)}</option>)}
+                        </select>{" "}
+                        <select value={it.metric ?? ""} onChange={(e) => setItem(i, { metric: e.target.value })}>
+                          {metricsOf(it.module).map((k) => <option key={k} value={k}>{metricLabel(k)}</option>)}
+                        </select>
+                      </div>
+                    )}
+                    {it.src === "@msg" && (
+                      <div style={{ marginTop: 4 }}>
+                        місце{" "}
+                        <select value={it.slot ?? 1} onChange={(e) => setItem(i, { slot: Number(e.target.value) })}>
+                          {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+                        </select>
+                        <span className="note"> текст задає дія правила «Вивести на екран»</span>
+                      </div>
+                    )}
                   </td>
-                  <td><input value={it.label} maxLength={24} placeholder={DEFAULT_LABEL[it.src] ?? it.src} onChange={(e) => setItem(i, { label: e.target.value })} style={{ width: 120 }} /></td>
+                  <td><input value={it.label} maxLength={24} placeholder={labelHint(it)} onChange={(e) => setItem(i, { label: e.target.value })} style={{ width: 120 }} /></td>
                   <td>
-                    {it.src.startsWith("@") || it.src === "uptime_s" ? <span className="muted">—</span> : (
-                      <input value={it.unit} maxLength={8} placeholder={DEFAULT_UNIT[it.src] ?? ""} onChange={(e) => setItem(i, { unit: e.target.value })} style={{ width: 60 }} />
+                    {(it.src.startsWith("@") && it.src !== "@remote") || it.src === "uptime_s" || (it.src === "@remote" && it.metric === "uptime_s") ? <span className="muted">—</span> : (
+                      <input value={it.unit} maxLength={8} placeholder={DEFAULT_UNIT[it.src === "@remote" ? it.metric ?? "" : it.src] ?? ""} onChange={(e) => setItem(i, { unit: e.target.value })} style={{ width: 60 }} />
                     )}
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}>
@@ -386,6 +448,12 @@ function DisplayEditor({ m, metrics, draft, isNew, busy, onCancel, onSave }: {
             <button disabled={d.items.length >= 12} onClick={() => set({ items: [...d.items, { src: "chip_temp_c", label: "", unit: "" }] })}>Додати пункт</button>
             <span className="note">Порожній підпис: короткий підпис за замовчуванням. У рядку вміщається 21 символ.</span>
           </div>
+          {usesData && !supportsData && (
+            <div className="note warn-text">Текст, показники інших модулів і повідомлення правил модуль покаже після оновлення прошивки до 0.5.0.</div>
+          )}
+          {usesData && (
+            <div className="note">Показник іншого модуля і повідомлення надсилає сервер; без зв'язку з ним на екрані «—».</div>
+          )}
         </div>
       </div>
       <div className="toolbar" style={{ marginTop: 8 }}>

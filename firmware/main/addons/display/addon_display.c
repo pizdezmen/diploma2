@@ -1,5 +1,7 @@
 // Доповнення «екран» (PROTOCOL.md 3.7): OLED 128×64 / 128×32 на I2C. Показує вибрані з сайту
 // показники модуля одним із видів: один великим, списком, по черзі. Нічого примусового поверх.
+// Пункти: показник цього модуля, службовий (@name, @link ...), сталий текст (@text) і дані з сервера
+// ($ключ: показник іншого модуля чи повідомлення правила; сервер надсилає їх командою screen).
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +21,7 @@ static const char *TAG = "display";
 #define RETRY_MS    5000
 #define REDRAW_MS   500
 #define W           128
+#define SRV_LINE_BYTES 64 // рядок до 21 символу, українські літери по 2 байти
 
 #if CONFIG_IDF_TARGET_ESP32C3
 #define DEF_SDA 5
@@ -33,9 +36,10 @@ static const char *TAG = "display";
 typedef enum { VIEW_BIG, VIEW_LIST, VIEW_CYCLE } view_t;
 
 typedef struct {
-    char src[33];   // назва показника або службовий пункт "@name", "@link" ...
+    char src[48];   // назва показника, службовий пункт "@name", "@text" ... або "$ключ" даних із сервера
     char label[40];
     char unit[16];
+    char text[128]; // для "@text"
 } item_t;
 
 typedef struct {
@@ -127,6 +131,9 @@ static void *create(const cJSON *cfg, char *err, size_t err_len)
         strlcpy(i->src, src, sizeof(i->src));
         strlcpy(i->label, get_str(it, "label", src), sizeof(i->label));
         strlcpy(i->unit, get_str(it, "unit", ""), sizeof(i->unit));
+        strlcpy(i->text, get_str(it, "text", ""), sizeof(i->text));
+        addons_utf8_fix(i->label);
+        addons_utf8_fix(i->text);
     }
     snprintf(d->err, sizeof(d->err), "запускається");
     return d;
@@ -256,6 +263,15 @@ static void fmt_duration(char *buf, size_t len, uint32_t s)
 static void item_value(const item_t *i, char *buf, size_t len)
 {
     const char *s = i->src;
+    if (s[0] == '$') {
+        // Дані з сервера: без зв'язку з ним вони застарілі, тож не показуємо
+        if (!mqtt_link_connected() || !addons_srv_get(s + 1, buf, len) || !buf[0]) strlcpy(buf, "—", len);
+        return;
+    }
+    if (strcmp(s, "@text") == 0) {
+        strlcpy(buf, i->text, len);
+        return;
+    }
     if (s[0] == '@') {
         if (strcmp(s, "@name") == 0) {
             addons_module_name(buf, len);
@@ -300,13 +316,49 @@ static void draw_centered(gfx_t *g, int y, const font_t *f, int scale, const cha
     gfx_text(g, w < g->w ? (g->w - w) / 2 : 0, y, f, scale, s, g->w);
 }
 
+// Довгий текст (повідомлення) дрібним шрифтом у кілька рядків, з переносом по словах, по центру області.
+static void draw_wrapped(gfx_t *g, int top, const font_t *f, const char *s)
+{
+    enum { LINES_MAX = 6 };
+    const int per_line = g->w / f->w;
+    int max_lines = (g->h - top) / f->h;
+    if (max_lines > LINES_MAX) max_lines = LINES_MAX;
+    char lines[LINES_MAX][SRV_LINE_BYTES];
+    int n = 0;
+    while (*s && n < max_lines) {
+        while (*s == ' ') s++;
+        // шукаємо, де закінчується рядок: не більше per_line символів, бажано на пробілі
+        const char *p = s, *brk = NULL;
+        int chars = 0;
+        while (*p && *p != '\n' && chars < per_line) {
+            if (*p == ' ') brk = p;
+            p++;
+            while ((*p & 0xC0) == 0x80) p++;
+            chars++;
+        }
+        const char *end = p;
+        if (*p && *p != '\n' && *p != ' ' && brk && n < max_lines - 1) end = brk;
+        size_t l = end - s;
+        if (l >= sizeof(lines[0])) l = sizeof(lines[0]) - 1;
+        memcpy(lines[n], s, l);
+        lines[n][l] = '\0';
+        n++;
+        s = *end == '\n' ? end + 1 : end;
+    }
+    int y = top + ((g->h - top) - n * f->h) / 2;
+    for (int k = 0; k < n; k++) draw_centered(g, y + k * f->h, f, 1, lines[k]);
+}
+
 // Один пункт великим: підпис угорі, значення посередині якомога більшим шрифтом.
+// Без підпису значення займає весь екран; задовгий текст переноситься на кілька рядків.
 static void draw_big(gfx_t *g, const item_t *i)
 {
-    char val[48];
+    char val[SRV_LINE_BYTES * 2];
     item_value(i, val, sizeof(val));
     const font_t *sm = &font_6x10, *bg = &font_10x20;
-    draw_centered(g, 0, sm, 1, i->label);
+    bool has_label = i->label[0] != '\0';
+    if (has_label) draw_centered(g, 0, sm, 1, i->label);
+    int area_top = has_label ? sm->h + 1 : 0;
 
     bool unit = i->unit[0] && strcmp(val, "—") != 0;
     int uw = unit ? 2 + gfx_text_width(sm, 1, i->unit) : 0;
@@ -314,9 +366,15 @@ static void draw_big(gfx_t *g, const item_t *i)
     int scale = g->h >= 64 ? 2 : 1;
     while (scale > 1 && gfx_text_width(f, scale, val) + uw > g->w) scale--;
     if (gfx_text_width(f, scale, val) + uw > g->w) f = sm;
+    if (gfx_text_width(f, 1, val) + uw > g->w) {
+        char txt[sizeof(val) + 20];
+        with_unit(txt, sizeof(txt), val, unit ? i->unit : "");
+        draw_wrapped(g, area_top, sm, txt);
+        return;
+    }
 
     // Цифри великого шрифту займають верхню частину клітинки: центруємо за висотою «ascent».
-    int area_top = sm->h + 1, area_h = g->h - area_top;
+    int area_h = g->h - area_top;
     int vh = (f == bg ? 13 : f->ascent - 1) * scale; // видима висота цифр
     int top_pad = f == bg ? 3 * scale : 1;          // порожні рядки над цифрами в гліфі
     int y = area_top + (area_h - vh) / 2 - top_pad;
@@ -330,14 +388,19 @@ static void draw_big(gfx_t *g, const item_t *i)
 }
 
 // Список: підпис ліворуч, значення праворуч, по рядку на пункт.
+// Пункт без підпису (наприклад, текст чи повідомлення) займає весь рядок від лівого краю.
 static void draw_list(gfx_t *g, const item_t *items, int n)
 {
     const font_t *f = &font_6x10;
     for (int k = 0; k < n; k++) {
-        char val[48], txt[64];
+        char val[SRV_LINE_BYTES * 2], txt[sizeof(val) + 20];
         item_value(&items[k], val, sizeof(val));
         with_unit(txt, sizeof(txt), val, items[k].unit);
         int y = k * f->h;
+        if (!items[k].label[0]) {
+            gfx_text(g, 0, y, f, 1, txt, g->w);
+            continue;
+        }
         int vw = gfx_text_width(f, 1, txt);
         if (vw > g->w) vw = g->w;
         int lx_max = g->w - vw - f->w; // між підписом і значенням хоча б один пробіл

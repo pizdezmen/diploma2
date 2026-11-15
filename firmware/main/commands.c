@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "dm.h"
+#include "addons.h"
 
 static const char *TAG = "cmd";
 
@@ -94,6 +95,13 @@ void commands_handle(const char *data, int len)
     const cJSON *idj = cJSON_GetObjectItem(j, "id");
     const cJSON *namej = cJSON_GetObjectItem(j, "name");
     const cJSON *params = cJSON_GetObjectItem(j, "params");
+
+    // Дані для екранів сервер надсилає часто й без id: без відповіді й без запису в журнал
+    if (cJSON_IsString(namej) && strcmp(namej->valuestring, "screen") == 0) {
+        addons_srv_set(cJSON_GetObjectItem(params, "values"));
+        cJSON_Delete(j);
+        return;
+    }
 
     if (!cJSON_IsString(idj) || strlen(idj->valuestring) > 36) {
         ESP_LOGW(TAG, "команда без коректного id");

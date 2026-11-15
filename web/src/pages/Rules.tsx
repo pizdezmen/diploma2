@@ -322,23 +322,26 @@ function RuleForm({ form: f, setForm, meta, groups, onSave }: {
   );
 }
 
-type ActKind = "led:on" | "led:off" | "led:blink" | "restart" | "interval";
+type ActKind = "led:on" | "led:off" | "led:blink" | "restart" | "interval" | "screen";
 const ACT_TEXT: Record<ActKind, string> = {
   "led:on": "Світлодіод увімк.",
   "led:off": "Світлодіод вимк.",
   "led:blink": "Світлодіод блимати",
   restart: "Перезапуск",
   interval: "Змінити інтервал надсилання",
+  screen: "Вивести на екран",
 };
 
 function actKind(a: Action): ActKind {
   if (a.type === "interval") return "interval";
+  if (a.type === "screen") return "screen";
   if (a.name === "restart") return "restart";
   return `led:${a.params.mode}` as ActKind;
 }
 
 function makeAction(k: ActKind, target: string | null, interval: number | null = null): Action {
   if (k === "interval") return { type: "interval", interval_s: interval, target };
+  if (k === "screen") return { type: "screen", slot: 1, text: "{module}: {value}", duration_s: 0, target };
   if (k === "restart") return { type: "command", name: "restart", params: {}, target };
   return { type: "command", name: "led", params: { mode: k.slice(4) as "on" | "off" | "blink" }, target };
 }
@@ -363,6 +366,18 @@ function ActionList({ title, list, onChange, schedule }: {
               <>
                 <input type="number" min={1} max={3600} value={a.interval_s ?? ""} placeholder="як у групи"
                   onChange={(e) => upd(i, { ...a, interval_s: e.target.value ? Number(e.target.value) : null })} style={{ width: 90 }} />
+                <span className="note">с</span>
+              </>
+            )}
+            {a.type === "screen" && (
+              <>
+                <select value={a.slot} onChange={(e) => upd(i, { ...a, slot: Number(e.target.value) })} title="Місце на екрані: пункт «Повідомлення правила» з тим самим номером">
+                  {[1, 2, 3, 4].map((n) => <option key={n} value={n}>місце {n}</option>)}
+                </select>
+                <input value={a.text} maxLength={60} onChange={(e) => upd(i, { ...a, text: e.target.value })} style={{ width: 220 }}
+                  placeholder="порожньо = прибрати повідомлення" title="Можна {module}, {value}, {unit}, {threshold}, {rule}" />
+                <input type="number" min={0} max={86400} value={a.duration_s || ""} placeholder="до наступного"
+                  onChange={(e) => upd(i, { ...a, duration_s: Number(e.target.value || 0) })} style={{ width: 110 }} title="Скільки секунд показувати; порожньо = поки не замінить інше повідомлення" />
                 <span className="note">с</span>
               </>
             )}

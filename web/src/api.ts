@@ -85,9 +85,13 @@ export interface Limit {
 
 // Доповнення модуля (docs/PROTOCOL.md 3.7). Поки є один тип: екран.
 export interface DisplayItem {
-  src: string; // назва показника або службовий пункт "@name", "@link" ...
+  src: string; // назва показника, службовий пункт "@name", "@link" ... або "@text", "@remote", "@msg"
   label: string;
   unit: string;
+  text?: string; // @text
+  module?: string | null; // @remote: чий показник
+  metric?: string | null; // @remote
+  slot?: number; // @msg: місце 1–4 для повідомлення правила
 }
 export interface DisplayAddon {
   type: "display";
