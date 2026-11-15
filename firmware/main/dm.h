@@ -16,6 +16,10 @@ void        device_mark_restart_reason_ota(void); // наступний стар
 void        device_restart_after_ms(uint32_t ms);
 float       device_chip_temp_c(void);
 
+// ---- power_guard.c: захист від просадок живлення ----
+void power_guard_start(void);       // апаратний сторож: перезапуск, якщо плата зависла цілком
+void power_guard_start_delay(void); // після ввімкнення живлення: випадкова пауза 0–5 с перед Wi-Fi
+
 // ---- settings.c: NVS (простір "dm") ----
 esp_err_t settings_init(void);
 bool      settings_get_mqtt_pass(char *buf, size_t len);

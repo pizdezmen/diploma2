@@ -11,6 +11,7 @@ static const char *TAG = "dm";
 
 void app_main(void)
 {
+    power_guard_start(); // першим: далі будь-яке повне зависання закінчиться перезапуском
     ESP_ERROR_CHECK(settings_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -26,6 +27,7 @@ void app_main(void)
     if (!netcfg_usable()) {
         status_led_set(LED_BLINK); // ознака: модуль ще не налаштовано
     }
+    power_guard_start_delay(); // різні плати вмикають радіо в різний час
     wifi_mgr_start();
 
     esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
