@@ -7,6 +7,9 @@
 #include "freertos/semphr.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_attr.h"
+#include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "soc/soc_caps.h"
 #include "driver/gpio.h"
 #include "sdkconfig.h"
@@ -32,11 +35,30 @@ typedef struct {
     bool                ok;     // останній повідомлений стан
 } slot_t;
 
-static SemaphoreHandle_t s_lock;
+// Слоти належать лише задачі доповнень: робота з апаратом (I2C тощо) іде без спільних блокувань,
+// тож навіть якщо доповнення застрягне, зв'язок із сервером і status не чекають на нього.
 static slot_t s_slots[ADDONS_MAX];
 static int    s_count;
 static char  *s_last;            // текст масиву addons, щоб не перестворювати однакове
+
+// Спільне з іншими задачами (коротке блокування): нова конфігурація, назва, знімок стану.
+static SemaphoreHandle_t s_lock;
+static TaskHandle_t s_task;
+static char  *s_pending;         // новий масив addons від addons_apply_config (NULL = без змін)
+static bool   s_has_pending;
 static char   s_name[64];
+typedef struct { char id[17]; char type[17]; bool ok; char err[ADDON_ERR_LEN]; } snap_t;
+static snap_t s_snap[ADDONS_MAX];
+static int    s_snap_n;
+
+// Захист від зависання: перед кожним викликом доповнення записуємо його id у пам'ять, що переживає
+// перезапуск. Якщо сторожовий таймер перезапустив плату посеред виклику, це доповнення після старту
+// не запускається, доки не зміняться налаштування доповнень.
+#define GUARD_MAGIC 0x41444421u  // "ADD!"
+static RTC_NOINIT_ATTR uint32_t s_guard_magic;
+static RTC_NOINIT_ATTR char     s_guard_id[17];
+static char s_blocked_id[17];    // доповнення, на якому плата зависла минулого разу
+#define WDT_TIMEOUT_MS 8000
 
 void addons_utf8_fix(char *s)
 {
@@ -126,6 +148,11 @@ static void create_all(const cJSON *arr)
             char e[ADDON_ERR_LEN];
             snprintf(e, sizeof(e), "прошивка не знає тип «%.16s»", s->type_name);
             strlcpy(s->err, e, sizeof(s->err));
+        } else if (s_blocked_id[0] && strcmp(s->id, s_blocked_id) == 0) {
+            s->type = NULL;
+            strlcpy(s->err, "плата зависла під час роботи з цим доповненням і перезапустилася; вимкнено до зміни налаштувань. Перевірте дроти",
+                    sizeof(s->err));
+            addons_utf8_fix(s->err);
         } else {
             s->inst = s->type->create(it, s->err, sizeof(s->err));
             if (!s->inst) s->type = NULL;
@@ -183,20 +210,17 @@ void addons_apply_config(const char *json, int len)
     const cJSON *name = cJSON_GetObjectItem(j, "name");
     const cJSON *arr = cJSON_GetObjectItem(j, "addons");
     char *text = cJSON_IsArray(arr) ? cJSON_PrintUnformatted(arr) : NULL;
-
     apply_led(arr);
+    // Самі доповнення перестворює задача доповнень: тут лише передаємо їй новий список.
     xSemaphoreTake(s_lock, portMAX_DELAY);
     strlcpy(s_name, cJSON_IsString(name) ? name->valuestring : "", sizeof(s_name));
-    bool same = (text == NULL && s_last == NULL) || (text && s_last && strcmp(text, s_last) == 0);
-    if (!same) {
-        destroy_all();
-        if (cJSON_IsArray(arr)) create_all(arr);
-        free(s_last);
-        s_last = text ? strdup(text) : NULL;
-    }
+    free(s_pending);
+    s_pending = text ? strdup(text) : NULL;
+    s_has_pending = true;
     xSemaphoreGive(s_lock);
     cJSON_free(text);
     cJSON_Delete(j);
+    if (s_task) xTaskNotifyGive(s_task);
 }
 
 void addons_module_name(char *buf, size_t len)
@@ -236,37 +260,71 @@ void addons_add_status(cJSON *status)
     cJSON_AddBoolToObject(led, "active_low", lh.active_low);
     cJSON_AddStringToObject(led, "state", status_led_mode_str());
     cJSON_AddItemToArray(arr, led);
+
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    for (int i = 0; i < s_count; i++) {
-        const slot_t *s = &s_slots[i];
+    for (int i = 0; i < s_snap_n; i++) {
+        const snap_t *s = &s_snap[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "id", s->id);
-        cJSON_AddStringToObject(o, "type", s->type_name);
+        cJSON_AddStringToObject(o, "type", s->type);
         cJSON_AddBoolToObject(o, "ok", s->ok);
-        if (!s->ok && s->err[0]) {
-            char e[ADDON_ERR_LEN];
-            strlcpy(e, s->err, sizeof(e));
-            addons_utf8_fix(e); // інакше сервер не розбере все повідомлення status
-            cJSON_AddStringToObject(o, "error", e);
-        }
+        if (!s->ok && s->err[0]) cJSON_AddStringToObject(o, "error", s->err);
         cJSON_AddItemToArray(arr, o);
     }
     xSemaphoreGive(s_lock);
 }
 
+static void guard_set(const char *id)
+{
+    strlcpy(s_guard_id, id, sizeof(s_guard_id));
+    s_guard_magic = GUARD_MAGIC;
+}
+
+static void guard_clear(void) { s_guard_magic = 0; }
+
+// Застосовує новий список доповнень (у задачі доповнень).
+static void take_pending(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool has = s_has_pending;
+    char *text = s_pending;
+    s_pending = NULL;
+    s_has_pending = false;
+    xSemaphoreGive(s_lock);
+    if (!has) return;
+    bool same = (text == NULL && s_last == NULL) || (text && s_last && strcmp(text, s_last) == 0);
+    if (same) {
+        free(text);
+        return;
+    }
+    if (s_last) s_blocked_id[0] = '\0'; // налаштування змінилися: дати ще одну спробу
+    guard_set("*destroy");
+    destroy_all();
+    guard_clear();
+    cJSON *arr = text ? cJSON_Parse(text) : NULL;
+    if (cJSON_IsArray(arr)) create_all(arr);
+    cJSON_Delete(arr);
+    free(s_last);
+    s_last = text;
+}
+
 static void task(void *arg)
 {
+    esp_task_wdt_add(NULL);
     for (;;) {
+        take_pending();
         bool changed = false;
         int64_t now = esp_timer_get_time() / 1000;
-        xSemaphoreTake(s_lock, portMAX_DELAY);
         for (int i = 0; i < s_count; i++) {
             slot_t *s = &s_slots[i];
             bool ok = false;
             char err[ADDON_ERR_LEN] = "";
             if (s->type) {
+                guard_set(s->id);
                 s->type->tick(s->inst, now);
+                guard_clear();
                 ok = s->type->state(s->inst, err, sizeof(err));
+                addons_utf8_fix(err);
             } else {
                 strlcpy(err, s->err, sizeof(err));
             }
@@ -276,16 +334,39 @@ static void task(void *arg)
                 strlcpy(s->err, err, sizeof(s->err));
                 changed = true;
             }
+            esp_task_wdt_reset();
         }
-        xSemaphoreGive(s_lock);
-        // Публікуємо без s_lock: mqtt_link_publish_status сам викликає addons_add_status.
-        if (changed) mqtt_link_publish_status();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        if (changed || s_snap_n != s_count) {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            for (int i = 0; i < s_count; i++) {
+                strlcpy(s_snap[i].id, s_slots[i].id, sizeof(s_snap[i].id));
+                strlcpy(s_snap[i].type, s_slots[i].type_name, sizeof(s_snap[i].type));
+                s_snap[i].ok = s_slots[i].ok;
+                strlcpy(s_snap[i].err, s_slots[i].err, sizeof(s_snap[i].err));
+            }
+            s_snap_n = s_count;
+            xSemaphoreGive(s_lock);
+            mqtt_link_publish_status();
+        }
+        esp_task_wdt_reset();
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
     }
 }
 
 void addons_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
-    xTaskCreate(task, "addons", 4096, NULL, 4, NULL);
+    esp_reset_reason_t rr = esp_reset_reason();
+    bool wdt = rr == ESP_RST_TASK_WDT || rr == ESP_RST_INT_WDT || rr == ESP_RST_WDT || rr == ESP_RST_PANIC;
+    if (wdt && s_guard_magic == GUARD_MAGIC) {
+        s_guard_id[sizeof(s_guard_id) - 1] = '\0';
+        strlcpy(s_blocked_id, s_guard_id, sizeof(s_blocked_id));
+        ESP_LOGW(TAG, "минулого разу плата зависла на доповненні «%s»: його не запускаємо", s_blocked_id);
+    }
+    guard_clear();
+    // Сторожовий таймер задач: якщо доповнення зависне довше WDT_TIMEOUT_MS, плата перезапуститься
+    // (замість того, щоб висіти без зв'язку), а доповнення буде вимкнено (див. вище).
+    esp_task_wdt_config_t wc = { .timeout_ms = WDT_TIMEOUT_MS, .idle_core_mask = 0, .trigger_panic = true };
+    if (esp_task_wdt_reconfigure(&wc) == ESP_ERR_INVALID_STATE) esp_task_wdt_init(&wc);
+    xTaskCreate(task, "addons", 4096, NULL, 4, &s_task);
 }
