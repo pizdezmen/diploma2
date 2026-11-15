@@ -99,7 +99,11 @@ export function Addons({ m, metrics, onCommand }: { m: Module; metrics: string[]
       setBusy(false);
     }
   }
-  const withLed = (list: DisplayAddon[], led: LedAddon | undefined = ledCfg): Addon[] => (led ? [led, ...list] : list);
+  // led: undefined — лишити як є, null — прибрати (прошивка візьме своє за замовчуванням)
+  const withLed = (list: DisplayAddon[], led: LedAddon | null | undefined = ledCfg): Addon[] => {
+    const cur = led === undefined ? ledCfg : led;
+    return cur ? [cur, ...list] : list;
+  };
 
   function remove(i: number) {
     const a = displays[i];
@@ -172,7 +176,7 @@ export function Addons({ m, metrics, onCommand }: { m: Module; metrics: string[]
           state={ledState}
           busy={busy}
           onCancel={() => setLedEdit(false)}
-          onSave={(led) => saveAll(withLed(displays, led ?? undefined), "Збережено, модуль отримає налаштування")}
+          onSave={(led) => saveAll(withLed(displays, led), led ? "Збережено, модуль отримає налаштування" : "Повернено типові налаштування світлодіода")}
         />
       )}
       {edit && (
