@@ -51,7 +51,7 @@ typedef struct {
     oled_t   oled;
     // стан
     i2c_master_bus_handle_t bus;
-    bool     ready, powered, btn_ok;
+    bool     ready, powered, btn_ok, scanned;
     int      btn_prev;
     int64_t  next_try, last_draw, awake_until, page_at;
     int      page;
@@ -158,6 +158,36 @@ static void destroy(void *inst)
     free(d);
 }
 
+// Екран не відповів: пояснюємо, що на шині, щоб було зрозуміло, що перевірити.
+// Повне сканування лише раз на нові налаштування, далі повторюємо попередній висновок.
+static void describe_bus(disp_t *d, esp_err_t pe)
+{
+    if (d->scanned) return;
+    d->scanned = true;
+    char found[64] = "";
+    int n = 0;
+    if (pe != ESP_ERR_TIMEOUT) {
+        for (int a = 0x08; a <= 0x77 && n < 6; a++) {
+            if (i2c_master_probe(d->bus, a, 20) == ESP_OK) {
+                size_t l = strlen(found);
+                snprintf(found + l, sizeof(found) - l, "%s0x%02X", n ? ", " : "", a);
+                n++;
+            }
+        }
+    }
+    if (pe == ESP_ERR_TIMEOUT) {
+        snprintf(d->err, sizeof(d->err), "шина I2C не відповідає (GPIO%d, %d): перевірте, чи не переплутані SDA і SCL та чи є живлення",
+                 d->sda, d->scl);
+    } else if (n) {
+        snprintf(d->err, sizeof(d->err), "за адресою 0x%02X екрана немає, на шині знайдено: %s", d->addr, found);
+    } else {
+        snprintf(d->err, sizeof(d->err), "на шині I2C (SDA GPIO%d, SCL GPIO%d) нічого не знайдено: перевірте дроти й живлення 3V3",
+                 d->sda, d->scl);
+    }
+    addons_utf8_fix(d->err);
+    ESP_LOGW(TAG, "%s", d->err);
+}
+
 static bool init_hw(disp_t *d, int64_t now)
 {
     esp_err_t e = i2c_bus_acquire(d->sda, d->scl, &d->bus);
@@ -168,9 +198,9 @@ static bool init_hw(disp_t *d, int64_t now)
                  esp_err_to_name(e));
         return false;
     }
-    if (i2c_master_probe(d->bus, d->addr, 50) != ESP_OK) {
-        snprintf(d->err, sizeof(d->err), "екран не відповідає за адресою 0x%02X (SDA GPIO%d, SCL GPIO%d)",
-                 d->addr, d->sda, d->scl);
+    esp_err_t pe = i2c_master_probe(d->bus, d->addr, 50);
+    if (pe != ESP_OK) {
+        describe_bus(d, pe);
         release_hw(d);
         return false;
     }

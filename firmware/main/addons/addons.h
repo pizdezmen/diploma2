@@ -10,7 +10,7 @@
 #include "cJSON.h"
 
 #define ADDONS_MAX     4   // скільки доповнень на одній платі
-#define ADDON_ERR_LEN  96
+#define ADDON_ERR_LEN  200 // байт; українські літери по 2 байти
 
 typedef struct addon_type {
     const char *name; // значення поля "type", напр. "display"
@@ -33,6 +33,9 @@ void        addons_add_status(cJSON *status);
 void        addons_add_caps(cJSON *caps);
 // Назва модуля із сайту (поле "name" конфігурації); порожня, якщо не задана.
 void        addons_module_name(char *buf, size_t len);
+
+// Обрізає незавершений символ UTF-8 у кінці рядка (після snprintf/strlcpy з обрізанням).
+void        addons_utf8_fix(char *s);
 
 // Спільна перевірка GPIO: чи можна вільно використовувати вивід (не USB, не flash/PSRAM, не світлодіод).
 bool        addons_gpio_usable(int gpio, char *err, size_t err_len);

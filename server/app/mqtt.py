@@ -188,7 +188,8 @@ class MqttService:
         if not payload:
             return  # очищення retained-повідомлення
         try:
-            data = json.loads(payload)
+            # errors="replace": обрізаний символ UTF-8 у тексті від модуля не має губити все повідомлення
+            data = json.loads(payload.decode("utf-8", "replace"))
         except ValueError:
             log.warning("Некоректний JSON від %s у %s", mid, kind)
             return

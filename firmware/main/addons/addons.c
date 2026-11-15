@@ -38,6 +38,18 @@ static int    s_count;
 static char  *s_last;            // текст масиву addons, щоб не перестворювати однакове
 static char   s_name[64];
 
+void addons_utf8_fix(char *s)
+{
+    size_t n = strlen(s);
+    if (!n) return;
+    size_t i = n;
+    while (i > 0 && ((uint8_t)s[i - 1] & 0xC0) == 0x80) i--; // байти-продовження в кінці
+    if (i == 0) { s[0] = '\0'; return; }
+    uint8_t lead = (uint8_t)s[i - 1];
+    size_t need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+    if (n - (i - 1) < need) s[i - 1] = '\0';
+}
+
 static const addon_type_t *find_type(const char *name)
 {
     for (size_t i = 0; i < N_TYPES; i++) {
@@ -117,6 +129,7 @@ static void create_all(const cJSON *arr)
         } else {
             s->inst = s->type->create(it, s->err, sizeof(s->err));
             if (!s->inst) s->type = NULL;
+            else strlcpy(s->err, "запускається", sizeof(s->err));
         }
         ESP_LOGI(TAG, "%s (%s): %s", s->id, s->type_name, s->type ? "створено" : s->err);
     }
@@ -230,7 +243,12 @@ void addons_add_status(cJSON *status)
         cJSON_AddStringToObject(o, "id", s->id);
         cJSON_AddStringToObject(o, "type", s->type_name);
         cJSON_AddBoolToObject(o, "ok", s->ok);
-        if (!s->ok && s->err[0]) cJSON_AddStringToObject(o, "error", s->err);
+        if (!s->ok && s->err[0]) {
+            char e[ADDON_ERR_LEN];
+            strlcpy(e, s->err, sizeof(e));
+            addons_utf8_fix(e); // інакше сервер не розбере все повідомлення status
+            cJSON_AddStringToObject(o, "error", e);
+        }
         cJSON_AddItemToArray(arr, o);
     }
     xSemaphoreGive(s_lock);
