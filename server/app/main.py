@@ -8,6 +8,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from . import auth, db
 from .api import api, public
+from .rules import engine as rules_engine
+from .rules_api import router as rules_router
 from .hub import Client, hub
 from .mqtt import ID_RE, mqtt
 
@@ -29,7 +31,9 @@ async def lifespan(app: FastAPI):
     s = await db.get_settings()
     await db.apply_retention(s.get("retention_raw_days"), s.get("retention_1m_days"), s.get("retention_1h_days"))
     await mqtt.start()
+    await rules_engine.start()
     yield
+    await rules_engine.stop()
     await mqtt.stop()
     await db.close()
 
@@ -37,6 +41,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Моніторинг", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
 app.include_router(public)
 app.include_router(api)
+app.include_router(rules_router)
 
 
 @app.websocket("/api/ws")

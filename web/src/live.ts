@@ -1,12 +1,15 @@
 // Живий стан: список модулів (оновлюється через WebSocket) і потік телеметрії для відкритих графіків.
 import { useSyncExternalStore } from "react";
 import { api, Command, Module } from "./api";
+import { Alert } from "./rulesApi";
+import { toast } from "./toast";
 
 type TelemetryListener = (ts: number, values: Record<string, number>) => void;
 type CommandListener = (c: Command) => void;
 
 class LiveStore {
   modules = new Map<string, Module>();
+  alerts = new Map<number, Alert>(); // активні тривоги
   version = 0;
   connected = false;
   private listeners = new Set<() => void>();
@@ -40,8 +43,9 @@ class LiveStore {
   }
 
   async reload() {
-    const list = await api<Module[]>("/modules");
+    const [list, alerts] = await Promise.all([api<Module[]>("/modules"), api<Alert[]>("/alerts?active=true")]);
     this.modules = new Map(list.map((m) => [m.id, m]));
+    this.alerts = new Map(alerts.map((a) => [a.id, a]));
     this.emit();
   }
 
@@ -96,6 +100,15 @@ class LiveStore {
         this.modules.delete(msg.id);
         this.emit();
         break;
+      case "alert": {
+        const a: Alert = msg.data;
+        const isNew = !this.alerts.has(a.id);
+        if (a.ended_at) this.alerts.delete(a.id);
+        else this.alerts.set(a.id, a);
+        if (isNew && !a.ended_at) toast(a.message, a.level === "alarm");
+        this.emit();
+        break;
+      }
       case "command":
         this.commandListeners.forEach((fn) => fn(msg.data));
         break;
