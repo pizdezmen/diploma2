@@ -42,6 +42,9 @@ ALTER TABLE modules ADD COLUMN IF NOT EXISTS alarms  jsonb NOT NULL DEFAULT '[]'
 -- Доповнення модуля (docs/PROTOCOL.md 3.7): налаштування з сайту і стан, який повідомляє модуль
 ALTER TABLE modules ADD COLUMN IF NOT EXISTS addons      jsonb NOT NULL DEFAULT '[]';
 ALTER TABLE modules ADD COLUMN IF NOT EXISTS addon_state jsonb NOT NULL DEFAULT '[]';
+-- Потужність передавача Wi-Fi (docs/PROTOCOL.md 3.5): задана з сайту і діюча, яку повідомляє модуль
+ALTER TABLE modules ADD COLUMN IF NOT EXISTS wifi_tx_dbm real CHECK (wifi_tx_dbm BETWEEN 2 AND 21); -- NULL = найбільша
+ALTER TABLE modules ADD COLUMN IF NOT EXISTS wifi_tx_now real;
 
 CREATE TABLE IF NOT EXISTS telemetry (
     time       timestamptz NOT NULL,
