@@ -438,6 +438,17 @@ async def cancel_batch(bid: str):
     for it in b["items"]:
         if it["state"] == "waiting" and not it.get("command_id"):
             it.update(state="cancelled", message="Скасовано")
+    # Команди, що вже пішли на модулі, теж знімаємо з очікування: інакше завислий модуль тримає пакет
+    # до ota_timeout_s. Якщо модуль усе ж оновиться, це видно за версією і в подіях.
+    ids = [it["command_id"] for it in b["items"] if it.get("command_id")]
+    if ids:
+        rows = await db.p().fetch(
+            "UPDATE commands SET status = 'error', message = 'Зупинено користувачем', updated_at = now() "
+            "WHERE id = ANY($1) AND status IN ('sent', 'in_progress') RETURNING *", ids)
+        for r in rows:
+            if r["name"] == "ota" and mqtt.ota_pending.get(r["module_id"], ("",))[0] == r["id"]:
+                mqtt.ota_pending.pop(r["module_id"], None)
+            hub.broadcast({"type": "command", "data": public_command(r)})
     return await _batch_with_commands(b)
 
 
