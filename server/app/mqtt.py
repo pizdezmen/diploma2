@@ -40,12 +40,18 @@ class MqttService:
         # Дані для екранів (PROTOCOL.md 3.7.3): повідомлення правил і що вже надіслано кожному модулю
         self.screen_msgs: dict[str, dict[int, tuple[str, float | None]]] = {}  # модуль → місце → (текст, до коли)
         self.screen_sent: dict[str, dict] = {}
+        # Незавершені OTA: модуль → (id команди, коли надіслано). Щоб помітити, що модуль перезапустився
+        # без нової версії (обрив живлення під час завантаження), і не чекати ota_timeout_s.
+        self.ota_pending: dict[str, tuple[str, float]] = {}
 
     # ---------- запуск ----------
     async def start(self) -> None:
         rows = await db.p().fetch("SELECT * FROM modules")
         for r in rows:
             self.modules[r["id"]] = dict(r)
+        for r in await db.p().fetch(
+                "SELECT id, module_id, created_at FROM commands WHERE name = 'ota' AND status IN ('sent', 'in_progress')"):
+            self.ota_pending[r["module_id"]] = (r["id"], r["created_at"].timestamp())
         self._tasks = [
             asyncio.create_task(self._run(), name="mqtt"),
             asyncio.create_task(self._flusher(), name="flusher"),
@@ -246,6 +252,7 @@ class MqttService:
                 values = {**(m.get("last_values") or {}), **(latest[1] if latest else {})}
                 asyncio.create_task(self._alarms_changed(mid, old_alarms, alarms, values))
         if latest:
+            self._check_ota_restart(mid, latest[1].get("uptime_s"))
             m["last_values"] = {**(m.get("last_values") or {}), **latest[1]}
             m["last_seen_at"] = now_utc()
             if not m.get("online"):
@@ -357,7 +364,32 @@ class MqttService:
                 await db.add_event(mid, f"Команда «{row['name']}» не виконана: {message}", "warning")
             hub.broadcast({"type": "command", "data": public_command(row)})
 
+    def _check_ota_restart(self, mid: str, uptime) -> None:
+        """Модуль працює менше, ніж минуло від команди OTA, а версія не змінилася: оновлення обірвалося."""
+        p = self.ota_pending.get(mid)
+        if not p or not isinstance(uptime, (int, float)):
+            return
+        cid, sent_at = p
+        if uptime + 5 >= time.time() - sent_at:
+            return
+        self.ota_pending.pop(mid, None)
+        reason = (self.modules.get(mid) or {}).get("reset_reason") or "?"
+        asyncio.create_task(self._fail_command(
+            cid, mid, f"Модуль перезапустився, не оновившись (причина старту: {reason})"))
+
+    async def _fail_command(self, cid: str, mid: str, message: str) -> None:
+        try:
+            row = await db.p().fetchrow(
+                "UPDATE commands SET status = 'error', message = $3, updated_at = now() "
+                "WHERE id = $1 AND module_id = $2 AND status IN ('sent', 'in_progress') RETURNING *", cid, mid, message)
+            if row:
+                await db.add_event(mid, f"Команда «{row['name']}» не виконана: {message}", "warning")
+                hub.broadcast({"type": "command", "data": public_command(row)})
+        except Exception:
+            log.exception("Не вдалося позначити команду %s", cid)
+
     async def _finish_ota(self, mid: str, fw: str) -> None:
+        self.ota_pending.pop(mid, None)
         rows = await db.p().fetch(
             "UPDATE commands SET status = CASE WHEN params->>'version' = $2 THEN 'ok' ELSE 'error' END, "
             "message = CASE WHEN params->>'version' = $2 THEN 'Оновлено' ELSE 'Модуль стартував з іншою версією: ' || $2 END, "
@@ -417,6 +449,8 @@ class MqttService:
                     "   OR (status IN ('sent', 'in_progress') AND name = 'ota' AND updated_at < now() - make_interval(secs => $2)) "
                     "RETURNING *", settings.cmd_timeout_s, settings.ota_timeout_s)
                 for r in rows:
+                    if r["name"] == "ota" and self.ota_pending.get(r["module_id"], ("",))[0] == r["id"]:
+                        self.ota_pending.pop(r["module_id"], None)
                     hub.broadcast({"type": "command", "data": public_command(r)})
             except Exception:
                 log.exception("watchdog")
@@ -520,6 +554,8 @@ class MqttService:
             row = await db.p().fetchrow(
                 "UPDATE commands SET status = 'error', message = 'Брокер недоступний' WHERE id = $1 RETURNING *", cid)
         cmd = public_command(row)
+        if name == "ota" and row["status"] == "sent":
+            self.ota_pending[mid] = (cid, time.time())
         hub.broadcast({"type": "command", "data": cmd})
         return cmd
 

@@ -149,7 +149,7 @@ export function ModulesPage() {
   }
 
   async function cancelBatch() {
-    if (!batch || !confirm("Зупинити оновлення? Модуль, що вже оновлюється, завершить оновлення, решта залишиться як є.")) return;
+    if (!batch || !confirm("Зупинити оновлення? Модулі, що ще не почали, не оновлюватимуться; очікування тих, що вже оновлюються, буде знято.")) return;
     try {
       setBatch(await api<Batch>(`/commands/batches/${batch.id}/cancel`, { method: "POST" }));
     } catch (e) {
