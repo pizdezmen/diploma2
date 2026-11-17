@@ -131,9 +131,11 @@ class ModulePatch(BaseModel):
     limits: dict[str, Limit] | None = None
     # Доповнення (docs/PROTOCOL.md 3.7): увесь список одразу
     addons: list[Addon] | None = None
+    # Межа потужності передавача Wi-Fi, дБм; null = найбільша (PROTOCOL.md 3.5)
+    wifi_tx_dbm: float | None = Field(None, ge=2, le=21, multiple_of=0.25)
 
 
-MODULE_CONFIG_FIELDS = {"interval_s", "group_id", "hybrid", "filters", "limits", "addons"}
+MODULE_CONFIG_FIELDS = {"interval_s", "group_id", "hybrid", "filters", "limits", "addons", "wifi_tx_dbm"}
 
 
 @api.patch("/modules/{mid}")

@@ -200,6 +200,8 @@ def validate_metrics(d: dict) -> None:
 def config_extra(m: dict) -> dict:
     """Поля конфігурації етапу 2 для модуля m (з кешу MqttService.modules)."""
     out: dict = {}
+    if m.get("wifi_tx_dbm"):
+        out["wifi_tx_dbm"] = float(m["wifi_tx_dbm"])
     if m.get("hybrid"):
         out["hybrid"] = Hybrid(**m["hybrid"]).model_dump()
     if m.get("filters"):

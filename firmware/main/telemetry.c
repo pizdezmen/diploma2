@@ -365,6 +365,12 @@ void telemetry_apply_config(const char *data, int len)
              (unsigned long)c.rev, (unsigned long)c.interval_s, c.hybrid ? "так" : "ні",
              (unsigned long)c.normal_s, (unsigned long)c.history_s);
     xTaskNotifyGive(s_task);
+    {
+        cJSON *j = cJSON_ParseWithLength(data, len);
+        const cJSON *v = cJSON_GetObjectItem(j, "wifi_tx_dbm");
+        wifi_mgr_set_tx_power(cJSON_IsNumber(v) ? v->valuedouble : 0); // немає поля — найбільша
+        cJSON_Delete(j);
+    }
     addons_apply_config(data, len); // поза s_lock: задача доповнень сама читає показники під ним
     mqtt_link_publish_status();
 }

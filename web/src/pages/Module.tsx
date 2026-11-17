@@ -154,22 +154,30 @@ function OtaControl({ list, disabled, current, onRun }: { list: Firmware[]; disa
   );
 }
 
+// Межа потужності передавача Wi-Fi, дБм (драйвер приймає 2–21 з кроком 0,25)
+const WIFI_TX_STEPS = [19.5, 17, 15, 13, 11, 8.5, 5, 2];
+
 function Properties({ m, detail, groups, onSaved }: { m: Module; detail: Module | null; groups: Group[]; onSaved: () => void }) {
   const [name, setName] = useState(m.name);
   const [note, setNote] = useState(m.note);
   const [group, setGroup] = useState(m.group_id === null ? "" : String(m.group_id));
   const [interval, setIntervalS] = useState(m.interval_s === null ? "" : String(m.interval_s));
+  const [tx, setTx] = useState(m.wifi_tx_dbm === null ? "" : String(m.wifi_tx_dbm));
   const [busy, setBusy] = useState(false);
   useEffect(() => {
+    setTx(m.wifi_tx_dbm === null ? "" : String(m.wifi_tx_dbm));
     setName(m.name);
     setNote(m.note);
     setGroup(m.group_id === null ? "" : String(m.group_id));
     setIntervalS(m.interval_s === null ? "" : String(m.interval_s));
-  }, [m.id, m.name, m.note, m.group_id, m.interval_s]);
+  }, [m.id, m.name, m.note, m.group_id, m.interval_s, m.wifi_tx_dbm]);
 
   const dirty =
     name !== m.name || note !== m.note || group !== (m.group_id === null ? "" : String(m.group_id)) ||
-    interval !== (m.interval_s === null ? "" : String(m.interval_s));
+    interval !== (m.interval_s === null ? "" : String(m.interval_s)) ||
+    tx !== (m.wifi_tx_dbm === null ? "" : String(m.wifi_tx_dbm));
+  const txSupported = m.caps?.includes("wifi_tx");
+  const txOptions = [...new Set([...WIFI_TX_STEPS, ...(m.wifi_tx_dbm === null ? [] : [m.wifi_tx_dbm])])].sort((a, b) => b - a);
   const grp = groups.find((g) => String(g.id) === group);
 
   async function save() {
@@ -177,7 +185,8 @@ function Properties({ m, detail, groups, onSaved }: { m: Module; detail: Module 
     try {
       await api(`/modules/${m.id}`, {
         method: "PATCH",
-        body: { name, note, group_id: group ? Number(group) : null, interval_s: interval ? Number(interval) : null },
+        body: { name, note, group_id: group ? Number(group) : null, interval_s: interval ? Number(interval) : null,
+          wifi_tx_dbm: tx ? Number(tx) : null },
       });
       toast("Збережено");
       onSaved();
@@ -207,6 +216,18 @@ function Properties({ m, detail, groups, onSaved }: { m: Module; detail: Module 
           <input type="number" min={1} max={3600} value={interval} onChange={(e) => setIntervalS(e.target.value)} style={{ width: 90 }}
             placeholder={grp?.interval_s ? String(grp.interval_s) : "типовий"} />
           <span className="note">{interval ? "свій" : grp?.interval_s ? `як у групи (${grp.interval_s} с)` : "типовий"}</span>
+        </div>
+        <div className="form-row">
+          <label>Потужність Wi-Fi</label>
+          <select value={tx} onChange={(e) => setTx(e.target.value)} disabled={!txSupported && !tx}>
+            <option value="">Найбільша (типово)</option>
+            {txOptions.map((v) => <option key={v} value={String(v)}>{v} дБм</option>)}
+          </select>
+          <span className="note">
+            {!txSupported ? "потрібна прошивка 0.5.2 або новіша"
+              : m.wifi_tx_now !== null ? `зараз ${m.wifi_tx_now} дБм` : ""}
+            {txSupported && " · менше потужність — менший піковий струм; рівень сигналу трохи впаде"}
+          </span>
         </div>
         <div className="form-row"><label>Примітка</label><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} style={{ flex: 1 }} /></div>
         <button className="primary" disabled={!dirty || busy} onClick={save}>Зберегти</button>

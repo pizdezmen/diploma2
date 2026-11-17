@@ -311,6 +311,8 @@ class MqttService:
                     for a in data["addons"][:8] if isinstance(a, dict)]
             elif "caps" in fields and "addons" not in fields["caps"]:
                 fields["addon_state"] = []
+            tx = data.get("wifi_tx_dbm")
+            fields["wifi_tx_now"] = float(tx) if isinstance(tx, (int, float)) and not isinstance(tx, bool) else None
             if isinstance(data.get("config_rev"), int):
                 fields["applied_config_rev"] = data["config_rev"]
             fields["last_seen_at"] = now
@@ -529,7 +531,7 @@ class MqttService:
 
 def public_module(m: dict) -> dict:
     keys = ("id", "name", "note", "group_id", "chip", "fw", "idf", "ip", "ssid", "reset_reason", "led", "caps",
-            "online", "interval_s", "hybrid", "filters", "limits", "alarms", "addons", "addon_state", "config_rev", "applied_config_rev", "provisioned", "provision_denied_at",
+            "online", "interval_s", "hybrid", "filters", "limits", "alarms", "addons", "addon_state", "wifi_tx_dbm", "wifi_tx_now", "config_rev", "applied_config_rev", "provisioned", "provision_denied_at",
             "last_values", "last_seen_at", "last_status_at", "created_at")
     return {k: m.get(k) for k in keys}
 

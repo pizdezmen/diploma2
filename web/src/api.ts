@@ -55,6 +55,8 @@ export interface Module {
   alarms: string[];
   addons: Addon[];
   addon_state: AddonState[];
+  wifi_tx_dbm: number | null; // межа потужності Wi-Fi з сайту; null = найбільша
+  wifi_tx_now: number | null; // діюча, як повідомив модуль
   config_rev: number;
   applied_config_rev: number;
   provisioned: boolean;

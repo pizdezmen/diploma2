@@ -62,7 +62,9 @@ void mqtt_link_publish_status(void)
     cJSON_AddStringToObject(j, "reset_reason", device_reset_reason());
     cJSON_AddNumberToObject(j, "config_rev", telemetry_config_rev());
     cJSON_AddStringToObject(j, "led", status_led_mode_str());
-    const char *caps[] = { "led", "restart", "ota", "filters", "limits", "hybrid" };
+    double tx = wifi_mgr_tx_power();
+    if (tx > 0) cJSON_AddNumberToObject(j, "wifi_tx_dbm", tx);
+    const char *caps[] = { "led", "restart", "ota", "filters", "limits", "hybrid", "wifi_tx" };
     cJSON *ca = cJSON_CreateStringArray(caps, sizeof(caps) / sizeof(caps[0]));
     addons_add_caps(ca);
     cJSON_AddItemToObject(j, "caps", ca);

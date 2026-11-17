@@ -54,6 +54,8 @@ bool wifi_mgr_is_connected(void);
 int  wifi_mgr_rssi(void);               // 0, якщо не підключено
 void wifi_mgr_ip(char *buf, size_t len);
 const char *wifi_mgr_ssid(void);
+void wifi_mgr_set_tx_power(double dbm);  // 0 = найбільша потужність (типово)
+double wifi_mgr_tx_power(void);          // діюча межа, дБм; 0, якщо радіо ще не ввімкнено
 
 // ---- provision.c: POST /api/provision ----
 typedef enum {
